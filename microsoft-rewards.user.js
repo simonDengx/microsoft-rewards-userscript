@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.10
+// @version	3.7.12
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -1664,6 +1664,8 @@ FuckF.QUIZ_KEY = "Config.quiz";
 let hpQuizRunning = false;
 FuckF.taskHPQuiz = async () => {
     if (!GM_getValue("Harvest.quiz", true)) return true;
+    // 连续未入账后的自动停跑标记（独立键，避免与 UserConfig 的 Harvest.quiz 冲突）
+    if (GM_getValue("Config.quizDisabled", false)) return true;
     // HPQuiz 走 bing.com 的 cookie 会话，不使用 dapi token，也不依赖 FuckD.bing.host
     // （该字段在 tasksStart 里才赋值，而本函数在更早的外层流程就会被调用，不能依赖它）
     if (hpQuizRunning) return true;
@@ -1926,10 +1928,21 @@ FuckF.taskHPQuizInner = async () => {
                 const delta = balAfter - balBefore;
                 st.point = delta > 0 ? delta : 0;
                 save();
-                FuckF.log(delta > 0 ? "✨" : "🟡",
-                    delta > 0
-                        ? `HPQuiz 入账 +${delta} 分（余额 ${balBefore} → ${balAfter}）`
-                        : `HPQuiz 未检测到入账（余额 ${balBefore} → ${balAfter}），可能今日已领过或会话不匹配`);
+                if (delta > 0) {
+                    // 入账成功：清零连续未入账计数
+                    GM_setValue("Config.quizMiss", 0);
+                    FuckF.log("✨", `HPQuiz 入账 +${delta} 分（余额 ${balBefore} → ${balAfter}）`);
+                } else {
+                    // 未入账：累计连续失败天数，满 3 天自动停跑，避免长期空转增加风控面
+                    const miss = Number(GM_getValue("Config.quizMiss", 0)) + 1;
+                    GM_setValue("Config.quizMiss", miss);
+                    if (miss >= 3) {
+                        GM_setValue("Config.quizDisabled", true);
+                        FuckF.log("🟡", `HPQuiz 已连续 ${miss} 天未入账，自动停跑（恢复：清空 Config.quizDisabled 或删除该键）`);
+                    } else {
+                        FuckF.log("🟡", `HPQuiz 未检测到入账（余额 ${balBefore} → ${balAfter}），连续未入账 ${miss}/3`);
+                    }
+                }
             }
         }
         return true;
@@ -2044,7 +2057,20 @@ FuckF.taskHarvestInner = async () => {
     if (!profile) return false;
 
     const promos = profile.promotions || [];
-    const skipRe = /TrialUser|AppInstall|AppMigration|^Fosbury_|^HVA_|^Rewards_EdgeUsage_progress_info$/i;
+    // 不可上报项的判定（均为 2026-11 实测结论）：
+    //  · TrialUser：上报后会置 complete=True 但 p=0、余额不变，等于空耗掉一个可能值 200 分的资格，绝不能碰
+    //  · AppInstall / AppMigration / Fosbury / HVA：需要真实客户端行为，type101 无效
+    //  · Rewards_EdgeUsage：站点已下线的 Edge 用量信息项
+    //  · DailyCheckIn_Parent_*：打卡任务的父容器（0/1000），本身不可上报
+    //  · Gamification_Sapphire_DailyCheckIn：累计签到计数器（1/11760），不是一次性任务
+    const skipRe = /TrialUser|AppInstall|AppMigration|^Fosbury_|^HVA_|^Rewards_EdgeUsage_progress_info$|DailyCheckIn_Parent|Gamification_Sapphire_DailyCheckIn/i;
+
+    // 每日任务（Gamification_DailySet_区域_YYYYMMDD_ChildN）会提前一天下发，
+    // 对未到日期的项上报只会拿到 p=0。这里按内嵌日期直接跳过，省掉每天 3 次无效请求。
+    const offerDate = (oid) => {
+        const m = String(oid || "").match(/(20\d{6})/);
+        return m ? Number(m[1]) : 0;
+    };
 
     const targets = promos.filter((p) => {
         const a = (p && p.attributes) || {};
@@ -2053,7 +2079,10 @@ FuckF.taskHarvestInner = async () => {
         const max = Number(a.max), prog = Number(a.progress);
         if (!Number.isFinite(max) || max <= 0) return false;
         if (Number.isFinite(prog) && prog >= max) return false;
-        if (skipRe.test(p.name || "")) return false;
+        if (skipRe.test(p.name || "") || skipRe.test(a.offerid || "")) return false;
+        // 未来日期的每日任务：今日上报不计分，直接跳过（不当失败，次日自然成为当日项）
+        const d = offerDate(a.offerid);
+        if (d && d > Number(FuckD.bing.dateNowNum)) return false;
         if (!catOn(FuckF.harvestCategory(p.name))) return false;
         if (st.done.includes(a.offerid) || st.failed.includes(a.offerid)) return false;
         return true;
@@ -3129,12 +3158,14 @@ return new Promise((resolve) => {
             }
             // [PATCH] 通用任务收割：网页交卷通道已下线，改用 dapi type101 逐项上报
             // Sapphire / Evergreen / 每日任务全套，每天一轮
+            // [PATCH] 必须 await：这两个任务内部有随机等待（最长数十秒），
+            // 若 fire-and-forget，脚本在任务全部完成后 resolve，service worker 被回收，等待中的收割会被直接掐断。
             if (FuckD.bing.token) {
-                FuckF.taskHarvest().catch(e => FuckF.log("🔴", `任务收割调度异常！🔛${e.message}`));
+                try { await FuckF.taskHarvest(); } catch (e) { FuckF.log("🔴", `任务收割异常！🔛${e.message}`); }
             }
             // [PATCH] HPQuiz：bing.com + funapi 独立通道，不依赖 dapi token。
             // 放在这里而不是外层流程，是为了复用上面的随机停留，避免每次 cron 准点开跑。
-            FuckF.taskHPQuiz().catch(e => FuckF.log("🔴", `HPQuiz 异常！🔛${e.message}`));
+            try { await FuckF.taskHPQuiz(); } catch (e) { FuckF.log("🔴", `HPQuiz 异常！🔛${e.message}`); }
             if (needPromos || needSearch) {
                 const result = await FuckF.getRewardsInfo();
                 if (!result) {

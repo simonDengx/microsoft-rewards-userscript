@@ -1,5 +1,17 @@
 # 变更记录
 
+## 3.7.12
+
+- 修复收割与 HPQuiz 未等待完成就进入休眠：改为 `await`，日志顺序确定
+- 任务过滤器同时匹配 `name` 与 `offerid`，正确排除 `DailyCheckIn_Parent_*`（父容器 0/1000）与 `Gamification_Sapphire_DailyCheckIn`（累计签到计数器 1/11760）
+- 按 offerid 内嵌日期跳过未来日期的每日任务（`Gamification_DailySet_*_YYYYMMDD_*`），每天少发 3 次必然 `p=0` 的请求
+- 实测结论写入注释：`Bing_Sapphire_TrialUser` 上报后只置 `complete=True`、`p=0` 且余额不变，属于空耗资格，保持永久排除
+
+## 3.7.11
+
+- HPQuiz 增加自动停跑：连续 3 天检测不到入账则写 `Config.quizDisabled`，停止每日请求（独立键，不与 UserConfig 抢 `Harvest.quiz`）
+- 日志区分「未入账 x/3」与「已自动停跑」
+
 ## 3.7.10
 
 - 启用 GitHub Pages，`@updateURL` / `@downloadURL` 改为 Pages 地址（GitHub 自托管，无第三方缓存）
