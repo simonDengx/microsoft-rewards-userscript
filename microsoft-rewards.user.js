@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.15
+// @version	3.7.17
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -1653,6 +1653,29 @@ FuckF.reportViaAppChannel = async ({ type, attributes = {}, region }) => {
     });
 };
 
+// 读取当前积分余额（dapi 通道，需 token）。
+// 用途：上报类任务的响应只给「本次分值」，无法证明服务端真的记账；
+// 用余额前后差值做二次校验，才能区分「接口返回 ok」和「积分真的到账」。
+FuckF.readBalance = async () => {
+    if (!FuckD.bing.token) return null;
+    try {
+        const raw = await FuckF.xhr({
+            url: "https://prod.rewardsplatform.microsoft.com/dapi/me?channel=SAAndroid&options=Promotions",
+            headers: {
+                "content-type": "application/json; charset=UTF-8",
+                authorization: `Bearer ${FuckD.bing.token}`,
+                "x-rewards-appid": "SAAndroid/31.4.2110003555",
+                "x-rewards-ismobile": "true",
+                "x-rewards-country": FuckD.bing.status ? "cn" : ((FuckD.bing.region || "").toLowerCase() || "cn"),
+                "user-agent": FuckD.ua.m,
+                accept: "*/*",
+            },
+        });
+        const m = String(raw || "").match(/"balance":(\d+)/);
+        return m ? Number(m[1]) : null;
+    } catch (e) { return null; }
+};
+
 // ===== [PATCH] Bing 首页问答（HPQuiz）=====
 // 技术来源：脚本猫「微软积分商城签到（改进加强版）」3.6.73 的实现思路（GPL-3.0 系脚本，此处为独立重写）。
 // 这套接口是另一条独立的得分通道，与本脚本原先依赖的 rewards.bing.com Server Action 无关，
@@ -2116,6 +2139,28 @@ FuckF.taskHarvestInner = async () => {
         return true;
     });
 
+    // 未适配任务检测：有 offerid、未完成、上限有效，但被跳过规则或分类开关排除。
+    // 微软新增活动时会在这里主动报出来，不用每次手工翻 30 多项 promotion 全表。
+    // 放在「无任务就返回」之前，保证没有可做任务的日子也能收到新任务信号。
+    try {
+        const unadapted = promos.filter((p) => {
+            const a = (p && p.attributes) || {};
+            if (!a.offerid) return false;
+            if (String(a.complete || "").toLowerCase() === "true") return false;
+            const max = Number(a.max), prog = Number(a.progress);
+            if (!Number.isFinite(max) || max <= 0) return false;
+            if (Number.isFinite(prog) && prog >= max) return false;
+            const skipped = skipRe.test(p.name || "") || skipRe.test(a.offerid || "");
+            const disabled = !catOn(FuckF.harvestCategory(p.name));
+            return skipped || disabled;
+        });
+        if (unadapted.length && GM_getValue("Config.unadaptedNotified", 0) != today) {
+            GM_setValue("Config.unadaptedNotified", today);
+            const brief = unadapted.slice(0, 6).map(x => `${x.name}(${(x.attributes || {}).offerid})`).join("、");
+            FuckF.log("🧩", `检测到 ${unadapted.length} 个未适配任务（暂不处理，供后续适配）：${brief}${unadapted.length > 6 ? "…" : ""}`);
+        }
+    } catch (e) {}
+
     if (!targets.length) {
         if (!st.notified) {
             st.notified = true;
@@ -2134,6 +2179,8 @@ FuckF.taskHarvestInner = async () => {
     // 每批不同数量：1..maxPerRun，进一步打散节奏
     const batch = targets.slice(0, FuckF.getScopeRandomNum(1, maxPerRun));
 
+    FuckF.log("🌐", `任务收割：本轮处理 ${batch.length} 个（待做 ${targets.length} 个）`);
+
     // 起始抖动：错开 cron 整点秒级特征
     if (jitter > 0) {
         const wait = FuckF.getScopeRandomNum(0, jitter);
@@ -2143,13 +2190,18 @@ FuckF.taskHarvestInner = async () => {
         }
     }
 
-    FuckF.log("🌐", `任务收割：本轮处理 ${batch.length} 个（待做 ${targets.length} 个）`);
+    // 台账：按任务名累计当日到账积分，用于跨轮次对账
+    const ledger = (() => {
+        let l = GM_getValue("Config.ledger", null);
+        if (!l || l.date != today || typeof l.items !== "object") l = { date: today, items: {}, total: 0 };
+        return l;
+    })();
+    const balBefore = await FuckF.readBalance();
 
     let gained = 0, ok = 0;
     for (let i = 0; i < batch.length; i++) {
         const p = batch[i];
         const a = p.attributes;
-        const cat = FuckF.harvestCategory(p.name);
         try {
             const raw = await FuckF.reportViaAppChannel({ type: 101, attributes: { offerid: a.offerid }, region });
             let point = 0, dup = false, code = -1;
@@ -2164,6 +2216,9 @@ FuckF.taskHarvestInner = async () => {
                     ok++; gained += point;
                     st.point = (st.point || 0) + point;
                     st.done.push(a.offerid);
+                    ledger.items[p.name] = (ledger.items[p.name] || 0) + point;
+                    ledger.total += point;
+                    GM_setValue("Config.ledger", ledger);
                     FuckF.log("✨", `${p.name} +${point} 分`);
                 } else {
                     // p=0：服务端接受但未记账（多为未到生效日期）。当天不再重复尝试。
@@ -2186,6 +2241,26 @@ FuckF.taskHarvestInner = async () => {
             const gap = FuckF.getScopeRandomNum(gapMin, gapMax);
             FuckF.log("⏳", `任务收割：等待 ${gap} 秒后处理下一个`);
             await new Promise(r => setTimeout(r, gap * 1000));
+        }
+    }
+
+    // 余额二次校验：接口返回的分值不等于真的到账，靠余额差值确认。
+    // 记账有滞后，所以等几秒再读；差值小于声明值时给出提示而不是当成失败（服务端可能滞后补记）。
+    if (gained > 0) {
+        let delta = null;
+        if (balBefore != null) {
+            await new Promise(r => setTimeout(r, 4000));
+            const balAfter = await FuckF.readBalance();
+            if (balAfter != null) delta = balAfter - balBefore;
+        }
+        if (delta == null) {
+            FuckF.log("🟡", `任务收割：本轮声明 +${gained} 分，余额校验不可用`);
+        } else if (delta >= gained) {
+            FuckF.log("🟢", `任务收割：余额校验通过 +${delta} 分（声明 +${gained}）`);
+        } else if (delta > 0) {
+            FuckF.log("🟡", `任务收割：余额仅 +${delta} 分，低于声明的 +${gained}（可能记账滞后）`);
+        } else {
+            FuckF.log("🟡", `任务收割：声明 +${gained} 分但余额未变化，可能服务端延迟记账或已计入当日额度`);
         }
     }
 
@@ -2997,6 +3072,17 @@ if (typeof GM_registerMenuCommand === 'function') {
         } catch (e) {}
     });
 
+    // 手动解除运行锁：实例被强杀后锁最多残留 3 分钟，急用时可以立刻清掉
+    GM_registerMenuCommand("🔓 解除运行锁", () => {
+        try {
+            const at = Number(GM_getValue("Config.runLock", 0)) || 0;
+            GM_setValue("Config.runLock", 0);
+            const info = at ? `已清除（原时间 ${new Date(at).toLocaleTimeString()}）` : "当前没有锁";
+            GM_log("[lock] " + info);
+            GM_notification({ text: info, title: GM_info.script.name, onclick: () => {} });
+        } catch (e) {}
+    });
+
     GM_registerMenuCommand("📋 粘贴授权码", () => {
         let text = null;
         try { text = prompt("请粘贴授权码链接（完整 URL）或授权码本身："); } catch (e) { text = null; }
@@ -3060,7 +3146,25 @@ if (typeof window !== 'undefined' && window.location && window.location.hostname
     return;
 }
 
-return new Promise((resolve) => {
+return new Promise((resolveRaw) => {
+    // 运行锁：cron 与手动 run 可能重叠，重叠会让同一批任务被并发上报（判重或重复计时）。
+    // 用心跳续期：运行期间每 60 秒刷新一次时间戳，超过 3 分钟没心跳视为上次被强杀（装新版本、重启浏览器都会），
+    // 这样既能拦住并发，又不会因为实例被杀而白等 10 分钟。
+    const LOCK_STALE = 3 * 60 * 1000;
+    const lockAt = Number(GM_getValue("Config.runLock", 0)) || 0;
+    if (lockAt && Date.now() - lockAt < LOCK_STALE) {
+        GM_log(`[lock] 上一次运行仍在进行（${Math.round((Date.now() - lockAt) / 1000)} 秒前心跳），本次跳过`);
+        return resolveRaw();
+    }
+    const refreshLock = () => { try { GM_setValue("Config.runLock", Date.now()); } catch (e) {} };
+    refreshLock();
+    const lockTimer = setInterval(refreshLock, 60 * 1000);
+    const resolve = (v) => {
+        try { clearInterval(lockTimer); } catch (e) {}
+        try { GM_setValue("Config.runLock", 0); } catch (e) {}
+        return resolveRaw(v);
+    };
+
     const seconds = FuckF.getTimestamp()
     GM_cookie("delete", { url: "https://bing.com", name: "_EDGE_S" })
     FuckD.search.limit = FuckF.getScopeRandomNum(4, 7)
@@ -3247,10 +3351,16 @@ return new Promise((resolve) => {
                 const today = FuckD.bing.dateNowNum;
                 const hs = GM_getValue(FuckF.HARVEST_KEY, {}) || {};
                 const qs = GM_getValue(FuckF.QUIZ_KEY, {}) || {};
+                const lg = GM_getValue("Config.ledger", {}) || {};
                 const hp = hs.date == today ? (hs.point || 0) : 0;
                 const qp = qs.date == today ? (qs.point || 0) : 0;
                 if (hp > 0 || qp > 0) {
                     FuckF.log("📊", `今日累计 +${hp + qp} 分（任务收割 +${hp}，HPQuiz +${qp}）`);
+                }
+                // 台账明细：按任务名列出当日每一笔到账，跨轮次累加
+                if (lg.date == today && lg.items && Object.keys(lg.items).length) {
+                    const detail = Object.entries(lg.items).map(([n, p]) => `${n} +${p}`).join("，");
+                    FuckF.log("📒", `今日台账（${Object.keys(lg.items).length} 项，共 +${lg.total}）：${detail}`);
                 }
             } catch (e) {}
             if (needPromos || needSearch) {
