@@ -1,8 +1,13 @@
 # 变更记录
 
+## 3.7.8
+
+- 新增 `@updateURL` / `@downloadURL` 指向本仓库 raw 地址，脚本猫自动检查更新
+- 本地分支统一为 `main`
+
 ## 3.7.7
 
-- 仓库迁移：发布源改为 GitHub，取消 `@updateURL`/`@downloadURL`，避免与脚本猫源码同步互相覆盖
+- 仓库迁移：发布源改为 GitHub
 - 头部补充 `@homepageURL` / `@supportURL` 指向本仓库
 - `@author` 更新为维护者，原作者信息保留在 `@original-*`
 
