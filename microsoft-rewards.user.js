@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.12
+// @version	3.7.13
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -2063,6 +2063,9 @@ FuckF.taskHarvestInner = async () => {
     //  · Rewards_EdgeUsage：站点已下线的 Edge 用量信息项
     //  · DailyCheckIn_Parent_*：打卡任务的父容器（0/1000），本身不可上报
     //  · Gamification_Sapphire_DailyCheckIn：累计签到计数器（1/11760），不是一次性任务
+    //    （2026-11 实测：SAAndroid / web+MSRewards / Bing / edge 四种 appid 组合下 promotion 集合分别为 31/26/26/26 项，
+    //     均只下发该计数器与 Gamification_Streak_Counter_Promotion，没有可上报的打卡 child 项，
+    //     说明打卡必须在 Bing App 内真实交互，dapi 通道无法完成）
     const skipRe = /TrialUser|AppInstall|AppMigration|^Fosbury_|^HVA_|^Rewards_EdgeUsage_progress_info$|DailyCheckIn_Parent|Gamification_Sapphire_DailyCheckIn/i;
 
     // 每日任务（Gamification_DailySet_区域_YYYYMMDD_ChildN）会提前一天下发，
@@ -3166,6 +3169,17 @@ return new Promise((resolve) => {
             // [PATCH] HPQuiz：bing.com + funapi 独立通道，不依赖 dapi token。
             // 放在这里而不是外层流程，是为了复用上面的随机停留，避免每次 cron 准点开跑。
             try { await FuckF.taskHPQuiz(); } catch (e) { FuckF.log("🔴", `HPQuiz 异常！🔛${e.message}`); }
+            // 每日汇总：收割与问答各自维护当日累计，这里合并成一行，便于一眼看到今天赚了多少
+            try {
+                const today = FuckD.bing.dateNowNum;
+                const hs = GM_getValue(FuckF.HARVEST_KEY, {}) || {};
+                const qs = GM_getValue(FuckF.QUIZ_KEY, {}) || {};
+                const hp = hs.date == today ? (hs.point || 0) : 0;
+                const qp = qs.date == today ? (qs.point || 0) : 0;
+                if (hp > 0 || qp > 0) {
+                    FuckF.log("📊", `今日累计 +${hp + qp} 分（任务收割 +${hp}，HPQuiz +${qp}）`);
+                }
+            } catch (e) {}
             if (needPromos || needSearch) {
                 const result = await FuckF.getRewardsInfo();
                 if (!result) {
