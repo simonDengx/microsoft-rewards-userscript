@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.13
+// @version	3.7.14
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -1932,6 +1932,9 @@ FuckF.taskHPQuizInner = async () => {
                     // 入账成功：清零连续未入账计数
                     GM_setValue("Config.quizMiss", 0);
                     FuckF.log("✨", `HPQuiz 入账 +${delta} 分（余额 ${balBefore} → ${balAfter}）`);
+                    // 问答是独立通道，此前只有日志没有通知，入账时一并推送
+                    FuckD.bing.sendMSG = `📝HPQuiz 入账 +${delta} 分（余额 ${balAfter}）`;
+                    FuckF.send(FuckD.wh);
                 } else {
                     // 未入账：累计连续失败天数，满 3 天自动停跑，避免长期空转增加风控面
                     const miss = Number(GM_getValue("Config.quizMiss", 0)) + 1;
