@@ -1,5 +1,10 @@
 # 变更记录
 
+## 3.7.10
+
+- 启用 GitHub Pages，`@updateURL` / `@downloadURL` 改为 Pages 地址（GitHub 自托管，无第三方缓存）
+- 此前镜像方案实测均有缓存延迟，ghfast/jsDelivr 抓到的仍是旧版本
+
 ## 3.7.9
 
 - `@updateURL` / `@downloadURL` 指向国内可用的加速地址：`raw.githubusercontent.com` 在国内直连超时，改用 `ghfast.top` 透传

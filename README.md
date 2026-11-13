@@ -12,18 +12,18 @@
 
 打开 [脚本猫脚本页](https://scriptcat.org/zh-CN/script-show-page/9065) 点击安装。
 
-**方式二：直接安装本仓库文件**
+**方式二：直接安装（GitHub Pages，推荐）**
 
-> `raw.githubusercontent.com` 在国内网络下直连超时，请使用下面的加速地址。
+```
+https://simondengx.github.io/microsoft-rewards-userscript/microsoft-rewards.user.js
+```
+
+国内直连 `raw.githubusercontent.com` 会超时，脚本头部的 `@updateURL` / `@downloadURL` 已指向上面的 Pages 地址，安装后会自动检查更新。
+
+备用加速地址（第三方镜像，内容可能有缓存延迟）：
 
 ```
 https://ghfast.top/https://raw.githubusercontent.com/simonDengx/microsoft-rewards-userscript/main/microsoft-rewards.user.js
-```
-
-备用镜像（jsDelivr CDN，分支引用有缓存延迟，通常数小时内生效）：
-
-```
-https://fastly.jsdelivr.net/gh/simonDengx/microsoft-rewards-userscript@main/microsoft-rewards.user.js
 ```
 
 **方式三：源码同步（开发者推荐）**
