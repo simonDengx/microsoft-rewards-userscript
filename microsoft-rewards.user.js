@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.14
+// @version	3.7.15
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -186,21 +186,31 @@ Notice:
 
 if (typeof window !== 'undefined' && window.location && window.location.hostname === "login.live.com") {
     (function() {
+        // 写 cookie 只是给「跨上下文读取」留的后备通道：
+        // 新版 ScriptCat 的 GM_cookie 是函数式 API（GM_cookie("set", details)），没有 .set 方法，
+        // 直接调用 GM_cookie.set 会抛 TypeError。两种写法都试，最后再退回 document.cookie。
         const setAuthCookie = function(code) {
-            if (typeof GM_cookie !== 'undefined') {
-                GM_cookie.set({
-                    name: "microsoft_rewards_auth_code",
-                    value: encodeURIComponent(code),
-                    domain: ".live.com",
-                    path: "/",
-                    secure: true,
-                    expirationDate: Date.now() / 1000 + 60
-                });
-            } else {
-                const expiration = new Date();
-                expiration.setTime(expiration.getTime() + 60 * 1000);
-                document.cookie = "microsoft_rewards_auth_code=" + encodeURIComponent(code) + "; expires=" + expiration.toUTCString() + "; path=/; domain=.live.com";
-            }
+            const details = {
+                name: "microsoft_rewards_auth_code",
+                value: encodeURIComponent(code),
+                domain: ".live.com",
+                path: "/",
+                secure: true,
+                expirationDate: Date.now() / 1000 + 60
+            };
+            try {
+                if (typeof GM_cookie !== 'undefined') {
+                    try { GM_cookie.set(details); }
+                    catch (e) { try { GM_cookie("set", details); } catch (e2) {} }
+                }
+            } catch (e) {}
+            try {
+                if (typeof document !== 'undefined') {
+                    const expiration = new Date();
+                    expiration.setTime(expiration.getTime() + 60 * 1000);
+                    document.cookie = "microsoft_rewards_auth_code=" + encodeURIComponent(code) + "; expires=" + expiration.toUTCString() + "; path=/; domain=.live.com";
+                }
+            } catch (e) {}
         };
 
         const checkAndCapture = function() {
@@ -210,8 +220,11 @@ if (typeof window !== 'undefined' && window.location && window.location.hostname
 
                 if (authCode && authCode.length > 10) {
                     const fullCode = "https://login.live.com/oauth20_desktop.srf?code=" + authCode.trim();
+                    // 先落库再写 cookie：cookie 通道可能因权限失败，不能影响主链路
                     GM_setValue("Config.code", fullCode);
                     GM_setValue("Config.token", false);
+                    GM_setValue("Config.codeTime", Date.now());
+                    GM_log(`[auth] 已捕获授权码（长度 ${authCode.length}），已清除旧 refresh token，下次运行自动换取新 token`);
                     setAuthCookie(fullCode);
 
                     if (GM_getValue("Notice.bro", true)) {
@@ -666,28 +679,25 @@ FuckF.renewToken = async () => {
         return new Promise((resolve) => {
             let settled = false;
             const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
-            // service_worker（@crontab 定时脚本）环境下 GM_cookie.get 回调可能永不触发，
+            // service_worker（@crontab 定时脚本）环境下 cookie 回调可能永不触发，
             // 不加超时会令 await 永久挂起、整个授权码轮询卡死（日志表现为此后再无任何输出）
             setTimeout(() => finish(null), 3000);
             try {
                 if (typeof GM_cookie !== 'undefined') {
-                    GM_cookie.get("microsoft_rewards_auth_code", (cookie) => {
-                        if (cookie && cookie.value) {
-                            finish(decodeURIComponent(cookie.value));
-                        } else {
-                            finish(null);
-                        }
-                    });
-                } else if (typeof document !== 'undefined') {
+                    const onCookie = (cookie) => {
+                        const v = Array.isArray(cookie) ? (cookie[0] && cookie[0].value) : (cookie && cookie.value);
+                        finish(v ? decodeURIComponent(v) : null);
+                    };
+                    // 新版 ScriptCat：函数式 API，没有 .get 方法；旧版是 GM_cookie.get(...)
+                    try { GM_cookie("get", { url: "https://login.live.com", name: "microsoft_rewards_auth_code" }, onCookie); }
+                    catch (e) { try { GM_cookie.get("microsoft_rewards_auth_code", onCookie); } catch (e2) {} }
+                }
+                if (typeof document !== 'undefined') {
                     const value = "; " + document.cookie;
                     const parts = value.split("; microsoft_rewards_auth_code=");
                     if (parts.length === 2) {
                         finish(decodeURIComponent(parts.pop().split(";").shift()));
-                    } else {
-                        finish(null);
                     }
-                } else {
-                    finish(null);
                 }
             } catch (e) {
                 finish(null);
@@ -744,10 +754,20 @@ FuckF.renewToken = async () => {
     };
 
     const fetchCodeLogic = async (msg) => {
+        // 自动打开授权页有冷却：token 长期失效时，cron 每 20 分钟跑一次，
+        // 不加限制会不停弹标签页。6 小时内只弹一次，其余轮次只写日志。
+        const lastPrompt = Number(GM_getValue("Config.lastAuthPrompt", 0)) || 0;
+        const COOLDOWN = 6 * 60 * 60 * 1000;
+        if (lastPrompt && Date.now() - lastPrompt < COOLDOWN) {
+            const left = Math.ceil((COOLDOWN - (Date.now() - lastPrompt)) / 60000);
+            FuckF.log("🟡", `${msg}，但 ${left} 分钟内已尝试过自动授权，本次不再打开页面。请手动点击脚本菜单「🔑 打开授权页面」完成授权`);
+            return null;
+        }
         // 记录旧授权码：清空只影响存储，轮询时用它过滤残留的失效旧码
         const oldCodeMatch = (GM_getValue("Config.code", "") || "").match(/M\.[^&]+/);
         const excludeCode = oldCodeMatch ? oldCodeMatch[0] : "";
         GM_setValue("Config.code", "");
+        GM_setValue("Config.lastAuthPrompt", Date.now());
         FuckF.log("🟡", `${msg}，正在打开授权页面...`);
 
         let authWindow = null;
@@ -796,6 +816,7 @@ FuckF.renewToken = async () => {
             if (!codeMatch) return false;
             return await FuckF.renewToken();
         }
+        GM_setValue("Config.lastAuthPrompt", 0);
         FuckD.bing.sendMSG = "Token 获取成功！";
         FuckF.log("🟢", FuckD.bing.sendMSG, true);
         FuckF.send(FuckD.wh);
@@ -811,6 +832,7 @@ FuckF.renewToken = async () => {
             if (!codeMatch) return false;
             return await FuckF.renewToken();
         }
+        GM_setValue("Config.lastAuthPrompt", 0);
         return true;
     }
 }
@@ -2938,24 +2960,72 @@ window.addEventListener('message', (event) => {
 });
 
 if (typeof GM_registerMenuCommand === 'function') {
-    GM_registerMenuCommand("📋 粘贴授权码", () => {
-        const clipboardText = prompt("请粘贴授权码链接（完整URL）：");
-        if (clipboardText && clipboardText.includes('login.live.com/oauth20_desktop.srf') && clipboardText.includes('code=')) {
-            GM_setValue("Config.code", clipboardText);
-            GM_setValue("Config.token", false);
-            GM_notification({
-                text: "授权码已更新，脚本将在下一次运行时使用新授权码",
-                title: GM_info.script.name,
-                onclick: () => {}
-            });
-            FuckF.log("🟢", "授权码已手动更新");
-        } else {
-            GM_notification({
-                text: "无效的授权码链接，请重试",
-                title: GM_info.script.name,
-                onclick: () => {}
-            });
+    // 打开授权页面：浏览器已登录微软账号时，授权链接会自动跳转到 oauth20_desktop.srf?code=...，
+    // 页面上的捕获分支会把 code 写进 Config.code，无需手动复制粘贴。
+    GM_registerMenuCommand("🔑 打开授权页面", () => {
+        const u = "https://login.live.com/oauth20_authorize.srf?client_id=0000000040170455&response_type=code&scope=service::prod.rewardsplatform.microsoft.com::MBI_SSL&redirect_uri=https://login.live.com/oauth20_desktop.srf";
+        try {
+            GM_openInTab(u, { active: true, insert: true });
+            if (GM_getValue("Notice.bro", true)) {
+                GM_notification({
+                    text: "登录后授权码会自动写入（无需复制）。若长时间未登录，页面会停在登录框。",
+                    title: GM_info.script.name,
+                    onclick: () => {}
+                });
+            }
+        } catch (e) {
+            GM_notification({ text: "无法自动打开，请手动访问：\n" + u, title: GM_info.script.name, onclick: () => {} });
         }
+    });
+
+    // 授权状态自检：把当前存储里的关键状态打印到日志，便于判断是「没码」还是「码失效」
+    GM_registerMenuCommand("🔍 检查授权状态", () => {
+        try {
+            const code = GM_getValue("Config.code", "") || "";
+            const token = GM_getValue("Config.token", "") || "";
+            const codeM = code.match(/M\.[^&]+/);
+            const t = GM_getValue("Config.codeTime", 0);
+            const when = t ? new Date(t).toLocaleString() : "未知";
+            const lines = [
+                `授权码: ${codeM ? "有（" + codeM[0].slice(0, 12) + "…）" : "无"}`,
+                `获取时间: ${when}`,
+                `refresh token: ${token ? "有（" + String(token).length + " 字节）" : "无（下次运行会重新换码）"}`,
+                `脚本版本: ${GM_info.script.version || "?"}`
+            ];
+            GM_log("[auth] === 授权状态 ===\n" + lines.join("\n"));
+            GM_notification({ text: lines.join("\n"), title: GM_info.script.name, onclick: () => {} });
+        } catch (e) {}
+    });
+
+    GM_registerMenuCommand("📋 粘贴授权码", () => {
+        let text = null;
+        try { text = prompt("请粘贴授权码链接（完整 URL）或授权码本身："); } catch (e) { text = null; }
+        if (text == null) {
+            GM_notification({
+                text: "当前环境不支持弹窗输入，请把授权码链接粘贴到脚本设置 → Config → 授权码链接",
+                title: GM_info.script.name,
+                onclick: () => {}
+            });
+            return;
+        }
+        const m = String(text).match(/M\.[^&\s]+/);
+        if (!m) {
+            GM_notification({ text: "未识别到授权码（应以 M. 开头），请重试", title: GM_info.script.name, onclick: () => {} });
+            return;
+        }
+        // 允许粘贴完整 URL，也允许只粘贴 M.xxx 这一段
+        const full = /oauth20_desktop\.srf/i.test(text)
+            ? text.trim()
+            : `https://login.live.com/oauth20_desktop.srf?code=${m[0]}`;
+        GM_setValue("Config.code", full);
+        GM_setValue("Config.token", false);
+        GM_setValue("Config.codeTime", Date.now());
+        GM_notification({
+            text: "授权码已更新，脚本将在下一次运行（最多 20 分钟）时换取新 token",
+            title: GM_info.script.name,
+            onclick: () => {}
+        });
+        FuckF.log("🟢", "授权码已手动更新");
     });
 }
 
