@@ -8,24 +8,31 @@
 
 ## 安装
 
-**方式一：脚本猫平台（推荐）**
+**方式一：脚本猫平台**
 
 打开 [脚本猫脚本页](https://scriptcat.org/zh-CN/script-show-page/9065) 点击安装。
 
 **方式二：直接安装本仓库文件**
 
-用脚本猫打开下面的 raw 地址即可安装：
+> `raw.githubusercontent.com` 在国内网络下直连超时，请使用下面的加速地址。
 
 ```
-https://raw.githubusercontent.com/simonDengx/microsoft-rewards-userscript/main/microsoft-rewards.user.js
+https://ghfast.top/https://raw.githubusercontent.com/simonDengx/microsoft-rewards-userscript/main/microsoft-rewards.user.js
+```
+
+备用镜像（jsDelivr CDN，分支引用有缓存延迟，通常数小时内生效）：
+
+```
+https://fastly.jsdelivr.net/gh/simonDengx/microsoft-rewards-userscript@main/microsoft-rewards.user.js
 ```
 
 **方式三：源码同步（开发者推荐）**
 
-在脚本猫脚本编辑页的「源代码同步」填入上面的 raw 地址，同步方式选「自动同步」。
+在脚本猫脚本编辑页的「源代码同步」填入上面的加速地址，同步方式选「自动同步」。
 之后本仓库有更新时，扩展会自动拉取，不需要手动重装。
 
-> 同步地址必须指向 `main` 分支下的 `microsoft-rewards.user.js`，且 `@version` 递增才会触发更新。
+> 同步地址需指向 `main` 分支，且 `@version` 递增才会触发更新。
+> 脚本头部已内置 `@updateURL` / `@downloadURL`，正常安装后脚本猫会自行检查更新。
 
 ## 仓库结构
 
@@ -101,15 +108,6 @@ Microsoft Rewards（微软积分商城）自动任务脚本的**维护版**，�
 2. 授权码获取方式与原版一致（访问脚本提供的授权页面，从跳转链接中复制 `code=` 参数）
 3. 定时脚本默认每 20 分钟运行一次，无需保持页面打开
 
-## 已知限制
-
-- Edge 浏览连签任务因站点下线无法完成
-- 「积分领取」功能站点已撤销，脚本不再尝试
-- 明日及以后的每日任务提前上报会返回 `p=0`，脚本会记录跳过，当天不再重试
-
-## 协议
-
-原版为 GPL-3.0，本维护版同样遵循 GPL-3.0 发布。原作者信息已在脚本头部通过 `@original-author`、`@original-script`、`@original-license` 标注。
 
 ## 已知限制
 

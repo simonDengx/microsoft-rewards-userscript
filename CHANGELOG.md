@@ -1,8 +1,13 @@
 # 变更记录
 
+## 3.7.9
+
+- `@updateURL` / `@downloadURL` 指向国内可用的加速地址：`raw.githubusercontent.com` 在国内直连超时，改用 `ghfast.top` 透传
+- README 补充镜像说明与源码同步配置方式
+
 ## 3.7.8
 
-- 新增 `@updateURL` / `@downloadURL` 指向本仓库 raw 地址，脚本猫自动检查更新
+- 新增 `@updateURL` / `@downloadURL` 指向本仓库 raw 地址
 - 本地分支统一为 `main`
 
 ## 3.7.7
