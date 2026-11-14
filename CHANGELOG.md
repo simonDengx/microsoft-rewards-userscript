@@ -1,5 +1,17 @@
 # 变更记录
 
+## 3.7.19
+
+- 授权捕获环节补齐三处细节（参考社区「前台授权助手」的做法）：
+
+  - 捕获 `?error=` 分支：记录 `Config.lastAuthError`（access_denied / invalid_request 等）并弹通知，不再静默失败
+
+  - 捕获后 `history.replaceState` 清理地址栏，code 不留在地址栏与浏览历史
+
+  - 脚本自己打开的授权页在捕获/报错后 400ms 自动关闭；手动打开的不动
+
+- 新增 `Config.codeManual`、`Config.authFlowAt`；「检查授权状态」菜单显示授权来源与最近一次错误
+
 ## 3.7.18
 
 - 台账改为全通道记账：活动任务（网页/APP 通道）也写入 `Config.ledger`，此前只记收割导致汇总偏低

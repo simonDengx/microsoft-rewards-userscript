@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.18
+// @version	3.7.19
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -213,18 +213,40 @@ if (typeof window !== 'undefined' && window.location && window.location.hostname
             } catch (e) {}
         };
 
+        // 捕获后清理地址栏：code 是一次性凭证，没必要留在地址栏和浏览历史里
+        const scrubUrl = function() {
+            try { history.replaceState({}, "", "/oauth20_desktop.srf"); } catch (e) {}
+        };
+
+        // 判断这个授权页是不是本脚本打开的：10 分钟内有「打开授权页」记录就算
+        const openedByScript = function() {
+            try {
+                const at = Number(GM_getValue("Config.authFlowAt", 0)) || 0;
+                return !!(at && (Date.now() - at) < 10 * 60 * 1000);
+            } catch (e) { return false; }
+        };
+
+        const closeIfOurs = function(ours) {
+            if (!ours) return;
+            setTimeout(function() { try { window.close(); } catch (e) {} }, 400);
+        };
+
         const checkAndCapture = function() {
             try {
                 const urlParams = new URLSearchParams(window.location.search);
                 const authCode = urlParams.get("code");
+                const authError = urlParams.get("error");
 
                 if (authCode && authCode.length > 10) {
                     const fullCode = "https://login.live.com/oauth20_desktop.srf?code=" + authCode.trim();
+                    const ours = openedByScript();
                     // 先落库再写 cookie：cookie 通道可能因权限失败，不能影响主链路
                     GM_setValue("Config.code", fullCode);
                     GM_setValue("Config.token", false);
                     GM_setValue("Config.codeTime", Date.now());
-                    GM_log(`[auth] 已捕获授权码（长度 ${authCode.length}），已清除旧 refresh token，下次运行自动换取新 token`);
+                    GM_setValue("Config.codeManual", !ours);
+                    GM_setValue("Config.lastAuthError", null);
+                    GM_log(`[auth] 已捕获授权码（长度 ${authCode.length}，${ours ? "脚本打开" : "手动打开"}），已清除旧 refresh token，下次运行自动换取新 token`);
                     setAuthCookie(fullCode);
 
                     if (GM_getValue("Notice.bro", true)) {
@@ -235,6 +257,26 @@ if (typeof window !== 'undefined' && window.location && window.location.hostname
                         });
                     }
 
+                    scrubUrl();
+                    closeIfOurs(ours);
+                    return true;
+                }
+
+                // OAuth 失败分支：常见 access_denied / invalid_request / consent_required
+                if (authError) {
+                    const desc = urlParams.get("error_description") || "";
+                    GM_setValue("Config.lastAuthError", { error: authError, description: desc, ts: Date.now() });
+                    GM_log(`[auth] 授权失败：${authError}${desc ? " · " + desc : ""}`);
+                    if (GM_getValue("Notice.bro", true)) {
+                        GM_notification({
+                            text: `授权失败：${authError}\n${desc.slice(0, 80)}`,
+                            title: GM_info.script.name,
+                            onclick: function() {}
+                        });
+                    }
+                    const ours = openedByScript();
+                    scrubUrl();
+                    closeIfOurs(ours);
                     return true;
                 }
             } catch (e) {}
@@ -768,6 +810,8 @@ FuckF.renewToken = async () => {
         const excludeCode = oldCodeMatch ? oldCodeMatch[0] : "";
         GM_setValue("Config.code", "");
         GM_setValue("Config.lastAuthPrompt", Date.now());
+        // 标记授权流程：登录页据此判断标签页是脚本打开的，捕获后可自动关闭
+        GM_setValue("Config.authFlowAt", Date.now());
         FuckF.log("🟡", `${msg}，正在打开授权页面...`);
 
         let authWindow = null;
@@ -3053,6 +3097,7 @@ if (typeof GM_registerMenuCommand === 'function') {
     GM_registerMenuCommand("🔑 打开授权页面", () => {
         const u = "https://login.live.com/oauth20_authorize.srf?client_id=0000000040170455&response_type=code&scope=service::prod.rewardsplatform.microsoft.com::MBI_SSL&redirect_uri=https://login.live.com/oauth20_desktop.srf";
         try {
+            GM_setValue("Config.authFlowAt", Date.now());
             GM_openInTab(u, { active: true, insert: true });
             if (GM_getValue("Notice.bro", true)) {
                 GM_notification({
@@ -3078,6 +3123,8 @@ if (typeof GM_registerMenuCommand === 'function') {
                 `授权码: ${codeM ? "有（" + codeM[0].slice(0, 12) + "…）" : "无"}`,
                 `获取时间: ${when}`,
                 `refresh token: ${token ? "有（" + String(token).length + " 字节）" : "无（下次运行会重新换码）"}`,
+                `授权来源: ${GM_getValue("Config.codeManual", false) ? "手动打开" : "脚本打开"}`,
+                (() => { const e = GM_getValue("Config.lastAuthError", null); return e ? `最近错误: ${e.error} ${String(e.description || "").slice(0, 40)}` : "最近错误: 无"; })()
                 `脚本版本: ${GM_info.script.version || "?"}`
             ];
             GM_log("[auth] === 授权状态 ===\n" + lines.join("\n"));

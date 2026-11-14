@@ -192,8 +192,14 @@ Microsoft Rewards（微软积分商城）自动任务脚本的**维护版**，�
 ```
 检测 URL 中的 ?code= → 长度 > 10 → 写入 Config.code
                                    → 清空 Config.token（触发下次换新）
-                                   → 记录 Config.codeTime（便于排查）
+                                   → 记录 Config.codeTime / codeManual（便于排查）
                                    → 尝试写 cookie microsoft_rewards_auth_code（仅作后备）
+                                   → history.replaceState 清理地址栏（code 不留在历史里）
+                                   → 若本页是脚本打开的，400ms 后自动关闭
+
+检测 URL 中的 ?error= → 记录 Config.lastAuthError
+                     → 弹通知说明失败原因（access_denied / invalid_request 等）
+                     → 同样清理地址栏；脚本打开的页面自动关闭
 ```
 
 后台脚本侧用 `GM_addValueChangeListener` 实时监听 `Config.code` 变化，所以**捕获是即时的**，不用等下一次轮询。同一个对象也做了「旧码过滤」，避免读到失效的历史 code。
@@ -205,6 +211,9 @@ Microsoft Rewards（微软积分商城）自动任务脚本的**维护版**，�
 | `Config.code` | 授权码链接（`oauth20_desktop.srf?code=...`） |
 | `Config.token` | refresh token；为空表示下次运行要重新换 |
 | `Config.codeTime` | 最近一次捕获/粘贴时间 |
+| `Config.codeManual` | 授权码来自手动打开页面（`true`）还是脚本打开（`false`） |
+| `Config.lastAuthError` | 最近一次 OAuth 失败信息（`error` / `description` / `ts`） |
+| `Config.authFlowAt` | 最近一次脚本主动打开授权页的时间（判断标签页归属） |
 | `Config.lastAuthPrompt` | 最近一次自动打开授权页的时间（冷却用，6 小时） |
 
 ### 自检与排错
