@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.17
+// @version	3.7.18
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -882,6 +882,8 @@ FuckF.getRewardsInfo = async (maxRetries = 3) => {
                 FuckF.log("🟡", "仪表盘解析异常，将使用保底数值");
             }
             FuckD.bing.todayTotalPoints = todayTotal;
+            // 持久化站方当日总分：汇总日志在本轮更早的位置执行，只能读上一轮写入的值
+            try { GM_setValue("Config.todayTotal", { date: FuckD.bing.dateNowNum, total: todayTotal }); } catch (e) {}
             return {
                 userStatus: {
                     availablePoints: balance,
@@ -1583,6 +1585,8 @@ FuckF.taskPromos = async () => {
                 earnPoints += item.points;
             }
             GM_setValue("Config.promosPoint", Math.max(todayPromosSaved, dashPoints + earnPoints));
+            // 记入台账：活动通道（网页/APP）的到账同样要进每日对账
+            FuckF.ledgerAdd(item.id, item.points);
             if (dashCurrent - 1 + earnCurrent - 1 < totalNewTasks) {
                 await new Promise(resolve => setTimeout(resolve, FuckF.getScopeRandomNum(2000, 4000)));
             }
@@ -1674,6 +1678,20 @@ FuckF.readBalance = async () => {
         const m = String(raw || "").match(/"balance":(\d+)/);
         return m ? Number(m[1]) : null;
     } catch (e) { return null; }
+};
+
+// 每日台账：按任务名累计当日到账，用于跨轮次对账。
+// 收割（dapi 直报）与活动任务（网页/APP 通道）都会写这里，避免汇总只统计一半。
+FuckF.ledgerAdd = (name, point) => {
+    try {
+        const today = FuckD.bing.dateNowNum;
+        let l = GM_getValue("Config.ledger", null);
+        if (!l || l.date != today || typeof l.items !== "object") l = { date: today, items: {}, total: 0 };
+        const key = String(name || "unknown").replace(/^Gamification_DailySet_[A-Z]+_\d+_/, "DailySet_");
+        l.items[key] = (l.items[key] || 0) + (Number(point) || 0);
+        l.total += (Number(point) || 0);
+        GM_setValue("Config.ledger", l);
+    } catch (e) {}
 };
 
 // ===== [PATCH] Bing 首页问答（HPQuiz）=====
@@ -2115,6 +2133,8 @@ FuckF.taskHarvestInner = async () => {
     //     均只下发该计数器与 Gamification_Streak_Counter_Promotion，没有可上报的打卡 child 项，
     //     说明打卡必须在 Bing App 内真实交互，dapi 通道无法完成）
     const skipRe = /TrialUser|AppInstall|AppMigration|^Fosbury_|^HVA_|^Rewards_EdgeUsage_progress_info$|DailyCheckIn_Parent|Gamification_Sapphire_DailyCheckIn/i;
+    // 已有专门模块处理的任务：不算「未适配」，否则每天都会在日志里误报
+    const handledRe = /readarticle|WW_search_global_NewLevel3|WW_NewLevel3_search/i;
 
     // 每日任务（Gamification_DailySet_区域_YYYYMMDD_ChildN）会提前一天下发，
     // 对未到日期的项上报只会拿到 p=0。这里按内嵌日期直接跳过，省掉每天 3 次无效请求。
@@ -2150,6 +2170,7 @@ FuckF.taskHarvestInner = async () => {
             const max = Number(a.max), prog = Number(a.progress);
             if (!Number.isFinite(max) || max <= 0) return false;
             if (Number.isFinite(prog) && prog >= max) return false;
+            if (handledRe.test(p.name || "") || handledRe.test(a.offerid || "")) return false;
             const skipped = skipRe.test(p.name || "") || skipRe.test(a.offerid || "");
             const disabled = !catOn(FuckF.harvestCategory(p.name));
             return skipped || disabled;
@@ -2190,12 +2211,6 @@ FuckF.taskHarvestInner = async () => {
         }
     }
 
-    // 台账：按任务名累计当日到账积分，用于跨轮次对账
-    const ledger = (() => {
-        let l = GM_getValue("Config.ledger", null);
-        if (!l || l.date != today || typeof l.items !== "object") l = { date: today, items: {}, total: 0 };
-        return l;
-    })();
     const balBefore = await FuckF.readBalance();
 
     let gained = 0, ok = 0;
@@ -2216,9 +2231,7 @@ FuckF.taskHarvestInner = async () => {
                     ok++; gained += point;
                     st.point = (st.point || 0) + point;
                     st.done.push(a.offerid);
-                    ledger.items[p.name] = (ledger.items[p.name] || 0) + point;
-                    ledger.total += point;
-                    GM_setValue("Config.ledger", ledger);
+                    FuckF.ledgerAdd(p.name, point);
                     FuckF.log("✨", `${p.name} +${point} 分`);
                 } else {
                     // p=0：服务端接受但未记账（多为未到生效日期）。当天不再重复尝试。
@@ -3354,7 +3367,12 @@ return new Promise((resolveRaw) => {
                 const lg = GM_getValue("Config.ledger", {}) || {};
                 const hp = hs.date == today ? (hs.point || 0) : 0;
                 const qp = qs.date == today ? (qs.point || 0) : 0;
-                if (hp > 0 || qp > 0) {
+                const tt = GM_getValue("Config.todayTotal", null);
+                const siteTotal = Number((tt && tt.date == today ? tt.total : 0) || FuckD.bing.todayTotalPoints || 0);
+                if (siteTotal > 0) {
+                    // 站方当日报表最准：包含签入/阅读/搜索/活动/收割全部来源
+                    FuckF.log("📊", `今日站方统计 +${siteTotal} 分（本脚本收割 +${hp}，HPQuiz +${qp}，其余为签入/阅读/搜索/活动）`);
+                } else if (hp > 0 || qp > 0) {
                     FuckF.log("📊", `今日累计 +${hp + qp} 分（任务收割 +${hp}，HPQuiz +${qp}）`);
                 }
                 // 台账明细：按任务名列出当日每一笔到账，跨轮次累加
