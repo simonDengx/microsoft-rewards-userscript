@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.31
+// @version	3.7.35
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -706,6 +706,28 @@ FuckF.getToken = async (url, maxRetries = 3) => {
 FuckF.renewToken = async () => {
     if (!FuckD.tasks.sign && !FuckD.tasks.read && !FuckD.tasks.edge) return true;
     let refreshToken = GM_getValue("Config.token", false);
+    // ⚠️ 用户主动粘贴的凭证必须优先于旧 token。
+    // 之前只在「没有 refresh token」时才看 Config.code，于是用户明明粘了新值，
+    // 脚本却继续用旧的 Config.token，日志里连一个字都不提——表现为「粘了没反应」。
+    // 判据：Config.codeTime 比 Config.tokenTime 新，说明用户最近一次动作是填授权码。
+    try {
+        const codeRaw = String(GM_getValue("Config.code", "") || "");
+        const codeAt = Number(GM_getValue("Config.codeTime", 0)) || 0;
+        const tokAt = Number(GM_getValue("Config.tokenTime", 0)) || 0;
+        const codeVal = (codeRaw.match(/M\.[^&\s]+/) || [])[0] || "";
+        if (codeVal && codeAt > tokAt) {
+            const k = /M\.[A-Z0-9_]+\.2\.U\./i.test(codeVal) ? "code" : (/M\.[A-Z0-9_]+\.0\.U\./i.test(codeVal) ? "refresh" : "unknown");
+            if (k === "refresh") {
+                FuckF.log("🟡", `授权码栏里是新粘贴的 refresh token，优先采用（覆盖旧 token）`);
+                GM_setValue("Config.token", codeVal);
+                GM_setValue("Config.tokenTime", Date.now());
+                refreshToken = codeVal;
+            } else if (k === "code") {
+                FuckF.log("🟡", `检测到新粘贴的授权码，优先用它换取 token（忽略旧 token）`);
+                refreshToken = false;
+            }
+        }
+    } catch (e) {}
     // 脏数据自愈：3.7.29 把「含 MsaArtifacts」当成 refresh token 特征，
     // 而真实授权码也含它，于是把有效的 .2.U. 授权码搬进了 Config.token。
     // 那批用户会一直 invalid_grant。这里反向搬回 Config.code（.2.U. 才可能是码）。
@@ -3342,83 +3364,97 @@ if (typeof GM_registerMenuCommand === 'function') {
         try { GM_setValue("Config.lastMenuResult", { what: "unlock", text: info, ts: Date.now() }); } catch (e) {}
         try { GM_notification({ text: info, title: GM_info.script.name, onclick: () => {} }); } catch (e) {}
     });
+}
 
-    // 统一的授权码写入逻辑，两个入口（原生输入框 / prompt）共用。
-    // ⚠️ 必须区分两种凭证，否则会静默失败：
-    //   · authorization code：M.C529_BAY.2.U.MsaArtifacts.…（一次性，换 token 用，几分钟过期）
-    //   · refresh token     ：M.C529_BAY.0.U.MsaArtifacts.…（长期，直接刷新 access token）
-    // ⚠️ 2026-11-16 实测纠正：两者【都】含 MsaArtifacts，靠它判别是错的
-    //    （3.7.29 就是这么判的，把有效授权码当成 refresh token，反而全部 invalid_grant）。
-    //    真正的判别位是版本段：.2.U. = 授权码，.0.U. = refresh token。
-    const credKind = (value) => {
-        if (/M\.[A-Z0-9_]+\.2\.U\./i.test(value)) return "code";
-        if (/M\.[A-Z0-9_]+\.0\.U\./i.test(value)) return "refresh";
-        if (/SN1\./i.test(value)) return "code";
-        return "unknown";
-    };
-    const applyPastedCode = (raw) => {
-        const text = String(raw || "").trim();
-        if (!text) return "empty";
-        const m = text.match(/M\.[^&\s]+/);
-        if (!m) return "invalid";
-        const value = m[0];
-        const kind = credKind(value);
+// ===== 凭证写入与粘贴入口（不受 GM_registerMenuCommand 是否存在影响）=====
+// ⚠️ 这里必须放在外面：后台定时脚本里 GM_registerMenuCommand 可能不存在，
+// 若把 CAT_registerMenuInput 套在那个 if 里，输入框菜单会一起消失，
+// 用户点「📋 粘贴授权码（输入框）」毫无反应，表现为「保存没成功」。
+// ⚠️ 必须区分两种凭证，否则会静默失败：
+//   · authorization code：M.C529_BAY.2.U.MsaArtifacts.…（一次性，换 token 用，几分钟过期）
+//   · refresh token     ：M.C529_xxx.0.U.MsaArtifacts.…（长期，直接刷新 access token）
+// 两者【都】含 MsaArtifacts，靠它判别是错的（3.7.29 就栽在这）。
+// 真正的判别位是版本段：.2.U. = 授权码，.0.U. = refresh token。
+const credKind = (value) => {
+    if (/M\.[A-Z0-9_]+\.2\.U\./i.test(value)) return "code";
+    if (/M\.[A-Z0-9_]+\.0\.U\./i.test(value)) return "refresh";
+    if (/SN1\./i.test(value)) return "code";
+    return "unknown";
+};
+const applyPastedCode = (raw) => {
+    const text = String(raw || "").trim();
+    if (!text) return "empty";
+    const m = text.match(/M\.[^&\s]+/);
+    if (!m) return "invalid";
+    const value = m[0];
+    const kind = credKind(value);
 
-        if (kind === "refresh") {
-            // refresh token：直接存进 Config.token，清掉 code（避免下次又拿它当 code 用）
-            GM_setValue("Config.token", value);
-            GM_setValue("Config.code", "");
-            GM_setValue("Config.tokenTime", Date.now());
-            GM_setValue("Config.codeManual", true);
-            GM_setValue("Config.lastAuthPrompt", 0);
-            GM_setValue("Config.lastTokenError", null);
-            return "ok-refresh";
-        }
-
-        // 授权码（或未知类型，按 code 处理并给出提示）
-        const full = /oauth20_desktop\.srf/i.test(text)
-            ? text
-            : `https://login.live.com/oauth20_desktop.srf?code=${value}`;
-        GM_setValue("Config.code", full);
-        GM_setValue("Config.token", false);
-        GM_setValue("Config.codeTime", Date.now());
+    if (kind === "refresh") {
+        // refresh token：直接存进 Config.token，清掉 code（避免下次又拿它当 code 用）
+        GM_setValue("Config.token", value);
+        GM_setValue("Config.code", "");
+        GM_setValue("Config.tokenTime", Date.now());
         GM_setValue("Config.codeManual", true);
         GM_setValue("Config.lastAuthPrompt", 0);
         GM_setValue("Config.lastTokenError", null);
-        return kind === "code" ? "ok-code" : "ok-unknown";
-    };
-
-    // 首选入口：ScriptCat 原生输入框。它不依赖页面 prompt（页面 CSP 可能拦 prompt），
-    // 在后台脚本里也能弹，是当前环境下最可靠的粘贴方式。
-    if (typeof CAT_registerMenuInput === "function") {
-        try {
-            CAT_registerMenuInput("📋 粘贴授权码（输入框）", (value) => {
-                const r = applyPastedCode(value);
-                let msg;
-                if (r === "ok-refresh") {
-                    msg = "已识别为 refresh token，已保存。下一轮运行会直接用它刷新，无需再授权";
-                    try { GM_log("🟢 已保存 refresh token（输入框）"); } catch (e) {}
-                } else if (r === "ok-code") {
-                    msg = "已识别为授权码（.2.U.），已保存。下一轮运行会立刻换取 token";
-                    try { GM_log("🟢 授权码已手动更新（输入框）"); } catch (e) {}
-                } else if (r === "ok-unknown") {
-                    msg = "已按授权码保存，但版本段无法识别（既不是 .2.U. 也不是 .0.U.），可能无效";
-                    try { GM_log("🟡 已保存未识别格式的凭证（输入框）"); } catch (e) {}
-                } else if (r === "invalid") {
-                    msg = "未识别到凭证（应以 M. 开头），请重试";
-                } else {
-                    msg = "输入为空";
-                }
-                try { GM_notification({ text: msg, title: GM_info.script.name, onclick: () => {} }); } catch (e) {}
-            }, {
-                inputType: "text",
-                title: "粘贴授权码或 refresh token",
-                inputLabel: "授权码（M.C529_xxx.2.U.…）或 refresh token（M.C529_xxx.0.U.…）",
-                inputPlaceholder: "https://login.live.com/oauth20_desktop.srf?code=M...",
-            });
-        } catch (e) {}
+        return "ok-refresh";
     }
 
+    // 授权码（或未知类型，按 code 处理并给出提示）
+    const full = /oauth20_desktop\.srf/i.test(text)
+        ? text
+        : `https://login.live.com/oauth20_desktop.srf?code=${value}`;
+    GM_setValue("Config.code", full);
+    GM_setValue("Config.token", false);
+    GM_setValue("Config.codeTime", Date.now());
+    GM_setValue("Config.codeManual", true);
+    GM_setValue("Config.lastAuthPrompt", 0);
+    GM_setValue("Config.lastTokenError", null);
+    return kind === "code" ? "ok-code" : "ok-unknown";
+};
+
+// 首选入口：ScriptCat 原生输入框。不依赖页面 prompt（CSP 可能拦），后台脚本里也能弹。
+const registerPasteInput = () => {
+    if (typeof CAT_registerMenuInput !== "function") return false;
+    try {
+        CAT_registerMenuInput("📋 粘贴授权码（输入框）", (value) => {
+            const r = applyPastedCode(value);
+            let msg;
+            if (r === "ok-refresh") {
+                msg = "已识别为 refresh token，已保存。下一轮运行会直接用它刷新，无需再授权";
+            } else if (r === "ok-code") {
+                msg = "已识别为授权码（.2.U.），已保存。下一轮运行会立刻换取 token";
+            } else if (r === "ok-unknown") {
+                msg = "已按授权码保存，但版本段无法识别（既不是 .2.U. 也不是 .0.U.），可能无效";
+            } else if (r === "invalid") {
+                msg = "未识别到凭证（应以 M. 开头），请重试";
+            } else {
+                msg = "输入为空";
+            }
+            // 三通道输出：日志（sctl logs 可查）+ 通知 + 存储回读，确保用户能看到结果
+            try { GM_log(`[paste] ${r} · ${msg}`); } catch (e) {}
+            try { GM_setValue("Config.lastMenuResult", { what: "paste", result: r, text: msg, ts: Date.now() }); } catch (e) {}
+            try { GM_notification({ text: msg, title: GM_info.script.name, onclick: () => {} }); } catch (e) {}
+        }, {
+            inputType: "text",
+            title: "粘贴授权码或 refresh token",
+            inputLabel: "授权码（M.C529_xxx.2.U.…）或 refresh token（M.C529_xxx.0.U.…）",
+            inputPlaceholder: "https://login.live.com/oauth20_desktop.srf?code=M...",
+        });
+        return true;
+    } catch (e) {
+        try { GM_log("[paste] CAT_registerMenuInput 注册失败：" + e.message); } catch (e2) {}
+        return false;
+    }
+};
+const pasteInputReady = (() => { try { return registerPasteInput(); } catch (e) { return false; } })();
+// 菜单能力自检：写在启动时，用来区分「菜单点了没反应」到底是哪个 API 不可用。
+// GM_registerMenuCommand 在后台定时脚本里可能不存在，而 CAT_registerMenuInput 才是 ScriptCat 自己的入口。
+try {
+    GM_log(`[menu] GM_registerMenuCommand=${typeof GM_registerMenuCommand === "function" ? "有" : "无"} · CAT_registerMenuInput=${typeof CAT_registerMenuInput === "function" ? "有" : "无"} · 输入框已注册=${pasteInputReady}`);
+} catch (e) {}
+
+if (typeof GM_registerMenuCommand === 'function') {
     GM_registerMenuCommand("📋 粘贴授权码", () => {
         let text = null;
         try { text = prompt("请粘贴授权码（M.C529_xxx.2.U.…）或 refresh token（M.C529_xxx.0.U.…），也可粘完整 URL："); } catch (e) { text = null; }
@@ -3545,6 +3581,13 @@ return new Promise((resolveRaw) => {
                         GM_setValue("Config.allDoneDate", FuckD.bing.dateNowNum);
                         const dashboard = await FuckF.getRewardsInfo();
                         const counters = dashboard?.userStatus?.counters || {};
+                        // 站方核对：本地记为完成但站方 PC 搜索还没满分时，如实报告差额，不谎报「全部完成」
+                        const chkPc = counters.pcSearch?.[0] || {};
+                        const chkPro = Number(chkPc.pointProgress || 0);
+                        const chkMax = Number(chkPc.pointProgressMax || 0);
+                        if (chkMax > 0 && chkPro < chkMax) {
+                            FuckF.log("🟡", `站方 PC 搜索未满分（${chkPro}/${chkMax}），差额 ${chkMax - chkPro} 分留待下轮`);
+                        }
                         const pcPro = counters.pcSearch?.[0]?.pointProgress || 0;
                         const mPro = counters.mobileSearch?.[0]?.pointProgress || 0;
                         const readPro = (FuckD.read.date == FuckD.bing.dateNowNum) ? GM_getValue("Config.readPoint", 0) : 0;
@@ -3653,6 +3696,29 @@ return new Promise((resolveRaw) => {
             const needPromos = FuckD.tasks.promos && (isKeep || FuckD.promos.date != FuckD.bing.dateNowNum);
             const needSearch = FuckD.tasks.search && (isKeep || FuckD.search.date != FuckD.bing.dateNowNum);
             FuckF.log("🔵", `初始化运行完成！用时 ${((FuckF.getTimestamp() - seconds) - initDelay) / 1000} 秒`);
+            // 授权状态摘要：每轮一行，指纹化输出（只露前 12 字符），
+            // 用于判断「粘进去了没」「是哪种凭证」「上次失败原因」——没有这行就只能靠猜。
+            try {
+                const rawCode = String(GM_getValue("Config.code", "") || "");
+                const rawTok = String(GM_getValue("Config.token", "") || "");
+                const pick = (v) => (v.match(/M\.[^&\s]+/) || [])[0] || "";
+                const kindOf = (v) => {
+                    if (!v) return "无";
+                    if (/M\.[A-Z0-9_]+\.2\.U\./i.test(v)) return "授权码.2.U.";
+                    if (/M\.[A-Z0-9_]+\.0\.U\./i.test(v)) return "refresh.0.U.";
+                    return "未识别";
+                };
+                const c = pick(rawCode);
+                const t = pick(rawTok);
+                const err = GM_getValue("Config.lastTokenError", null);
+                const tokAt = Number(GM_getValue("Config.tokenTime", 0)) || 0;
+                const parts = [
+                    `code=${c ? kindOf(c) + "(" + c.slice(0, 12) + "…)" : "无"}`,
+                    `token=${t ? kindOf(t) + "(" + t.length + "B" + (tokAt ? "，" + new Date(tokAt).toLocaleTimeString() + "写入" : "") + ")" : "无"}`,
+                ];
+                if (err) parts.push(`上次拒绝=${err.error}`);
+                FuckF.log("🔑", `授权状态：${parts.join(" · ")}`);
+            } catch (e) {}
             const isTokenOK = await FuckF.renewToken();
             if (!isTokenOK) {
                 FuckD.tasks.sign = false;
@@ -3760,7 +3826,27 @@ return new Promise((resolveRaw) => {
     }
     const isKeep = GM_getValue("Config.keep", true);
     const checkDone = (taskEnabled, taskDate) => !taskEnabled || taskDate == FuckD.bing.dateNowNum;
-    const isAllDone = checkDone(FuckD.tasks.sign, FuckD.sign.date) && checkDone(FuckD.tasks.read, FuckD.read.date) && checkDone(FuckD.tasks.promos, FuckD.promos.date) && checkDone(FuckD.tasks.search, FuckD.search.date) ;
+    // ⚠️ isAllDone 只看【本地记录的任务日期】，不看站方真实进度。
+    // 本地日期被写成今天、但站方其实没记账时，会误报「全部完成」并整天休眠——
+    // 这正是「有几天默默执行了，但日常任务没完成」的成因。
+    // 所以在宣告完成前用站方仪表盘核对一次真实进度，对不上就重置本地标记继续做。
+    // 注意：这段在 new Promise 回调里（非 async），只能用 Promise 链，不能 await。
+    const isAllDoneNow = () => checkDone(FuckD.tasks.sign, FuckD.sign.date) && checkDone(FuckD.tasks.read, FuckD.read.date) && checkDone(FuckD.tasks.promos, FuckD.promos.date) && checkDone(FuckD.tasks.search, FuckD.search.date);
+    const isAllDone = isAllDoneNow();
+    if (isAllDone && FuckD.tasks.search) {
+        FuckF.getRewardsInfo().then((dash) => {
+            const ctr = dash?.userStatus?.counters || {};
+            const pc = ctr.pcSearch?.[0] || {};
+            const pcPro = Number(pc.pointProgress || 0);
+            const pcMax = Number(pc.pointProgressMax || 0);
+            FuckF.log("🔍", `完成度核对：PC 搜索站方进度 ${pcPro}/${pcMax}`);
+            if (pcMax > 0 && pcPro < pcMax) {
+                FuckF.log("🟡", `本地记为已完成，但站方仍差 ${pcMax - pcPro} 分，重置完成标记继续执行`);
+                FuckD.search.date = 0;
+                try { GM_setValue("Config.tasks", FuckD.bing.tasks); } catch (e) {}
+            }
+        }).catch(() => {});
+    }
     // [PATCH] 任务收割与 HPQuiz 已移到 tasksStart 内部（复用随机停留，避免准点特征），
     // 此处不再重复调用。
     if ((!isKeep && isAllDone) || !FuckD.bing.repo.includes("geoisam") || (!FuckD.tasks.sign && !FuckD.tasks.read && !FuckD.tasks.promos && !FuckD.tasks.search )) {
