@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.19
+// @version	3.7.20
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -1602,15 +1602,26 @@ FuckF.taskPromos = async () => {
             }
             // 网页通道失败/跳过且 token 可用时改走 dapi APP 通道（type 101 + offerid，幂等、即时记账，不做 origin 校验）；
             // 注意 renewToken 仅在签入/阅读任务启用时执行，必须先判 token 空
+            let appPoint = -1;
             if (!posted && FuckD.bing.token) {
                 try {
                     const region = FuckD.bing.status ? "cn" : (FuckD.bing.region || "").toLowerCase();
                     const dapiResp = await FuckF.reportViaAppChannel({ type: 101, attributes: { offerid: item.id }, region });
                     if (dapiResp && FuckF.isJSON(dapiResp)) {
                         const res = JSON.parse(dapiResp);
-                        if (res.code === 0 && res.response?.activity) {
+                        const act = res.response?.activity;
+                        const dup = res.response?.isDuplicate === true;
+                        // 关键：不能只看 code===0。实测某些项（如 Gamification_DailySet_*_Child1）
+                        // 会返回 code=0 + activity 对象，但 activity.p=0、余额不增加——
+                        // 只判 code 会把「接口接受但没给分」当成完成，导致假完成、后续不再重试。
+                        if (res.code === 0 && act && !dup && Number(act.p) > 0) {
                             posted = true;
-                            FuckF.log("🟢", `活动 ${item.id} 已切换到APP通道完成`);
+                            appPoint = Number(act.p);
+                            FuckF.log("🟢", `活动 ${item.id} 已切换到APP通道完成（+${appPoint}）`);
+                        } else if (res.code === 0 && act && !dup && !(Number(act.p) > 0)) {
+                            FuckF.log("🟡", `活动 ${item.id} APP通道已接受但未记账（p=0），保留待下轮重试`);
+                        } else {
+                            FuckF.log("🟡", `活动 ${item.id} APP通道响应异常（code=${res.code}${dup ? "，判重" : ""}）`);
                         }
                     }
                 } catch (e) {
@@ -1623,14 +1634,16 @@ FuckF.taskPromos = async () => {
                 FuckF.log("🔴", `活动 ${item.id} 两个通道都失败，跳过该任务`);
                 continue;
             }
+            // 分值以服务端返回的 p 为准（APP 通道），网页通道成功时用卡片声明值
+            const credited = appPoint > 0 ? appPoint : item.points;
             if (item.type === 'dash') {
-                dashPoints += item.points;
+                dashPoints += credited;
             } else {
-                earnPoints += item.points;
+                earnPoints += credited;
             }
             GM_setValue("Config.promosPoint", Math.max(todayPromosSaved, dashPoints + earnPoints));
             // 记入台账：活动通道（网页/APP）的到账同样要进每日对账
-            FuckF.ledgerAdd(item.id, item.points);
+            FuckF.ledgerAdd(item.id, credited);
             if (dashCurrent - 1 + earnCurrent - 1 < totalNewTasks) {
                 await new Promise(resolve => setTimeout(resolve, FuckF.getScopeRandomNum(2000, 4000)));
             }
@@ -1649,9 +1662,23 @@ FuckF.taskPromos = async () => {
             } catch (e) {}
         }
         if (skipped > 0) {
-            // 有双通道均失败的项：不标记完成，下轮定时运行自动补做
-            FuckF.log("🟡", `有 ${skipped} 个活动未完成（网页与 APP 通道均失败），等待下轮重试`);
-            FuckD.promos.times++;
+            // 有未记账/失败的项：不标记完成，下轮定时运行自动补做。
+            // 注意不能无限重试：cron 每 20 分钟一轮，整夜空转既无意义也增加风控面。
+            // 用独立计数 Config.promosRetry（按日期重置），上限 8 轮；FuckD.promos.times 的 >2 是原版给
+            // 「本轮内重试」用的，不该被跨轮次的补做消耗掉，否则第 3 轮之后就永久放弃。
+            const retry = (() => {
+                let r = GM_getValue("Config.promosRetry", null);
+                if (!r || r.date != FuckD.bing.dateNowNum) r = { date: FuckD.bing.dateNowNum, n: 0 };
+                return r;
+            })();
+            retry.n++;
+            GM_setValue("Config.promosRetry", retry);
+            if (retry.n >= 8) {
+                FuckF.log("🟡", `有 ${skipped} 个活动连续 ${retry.n} 轮未记账，今日停止重试（可能需在 App 内完成或站点限制）`);
+                FuckD.promos.end++;
+                return true;
+            }
+            FuckF.log("🟡", `有 ${skipped} 个活动未记账（网页与 APP 通道均未给分），等待下轮重试（${retry.n}/8）`);
             return false;
         }
         FuckD.promos.end++;
@@ -2082,7 +2109,9 @@ FuckF.HARVEST_KEY = "Config.harvest";
 FuckF.harvestCategory = (name) => {
     if (!name) return "other";
     if (/^Sapphire_AppNewBonus_/i.test(name)) return "sapphire";
-    if (/^ENstar_Rewards_DailyGlobalOffer_Evergreen_/i.test(name)) return "evergreen";
+    // Evergreen 系列前缀不止 ENstar：实测还有 ZHstar_（中文版）等区域变体，
+    // 用 ^ENstar_ 严格匹配会把 ZHstar_ 落到 other 而被默认跳过。这里按「含 Evergreen」判定。
+    if (/Rewards_DailyGlobalOffer_Evergreen_/i.test(name)) return "evergreen";
     if (/^Gamification_DailySet_/i.test(name)) return "dailyset";
     if (/DailyCheckIn/i.test(name)) return "checkin";
     return "other";

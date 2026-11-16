@@ -1,5 +1,21 @@
 # 变更记录
 
+## 3.7.20
+
+修复三个导致「日常任务没完成」的问题：
+
+- **活动通道假完成**：APP 通道只判 `code===0 && response.activity` 就把任务标记为完成，
+  但实测 `Gamification_DailySet_*_Child1` 会返回 `code=0` + activity 对象且 `activity.p=0`、余额不增。
+  现在要求 `p>0` 才算完成，否则保留待下轮重试
+
+- **重试预算被耗尽**：`skipped>0` 时累加 `FuckD.promos.times`（原版单轮重试上限 2），
+  未记账项会很快撞上限被永久放弃。改用独立计数 `Config.promosRetry`（按日重置，上限 8 轮）
+
+- **Evergreen 前缀漏判**：分类用 `^ENstar_` 严格匹配，实测还有 `ZHstar_Rewards_DailyGlobalOffer_Evergreen_Monday`，
+  落到 `other` 被默认跳过，转而由旧活动通道处理。改为按 `Rewards_DailyGlobalOffer_Evergreen_` 通配
+
+- 台账/积分统计改用服务端返回的 `activity.p`（网页通道成功时用卡片声明值）
+
 ## 3.7.19
 
 - 授权捕获环节补齐三处细节（参考社区「前台授权助手」的做法）：
