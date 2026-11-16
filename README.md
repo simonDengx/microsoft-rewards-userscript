@@ -202,6 +202,13 @@ Microsoft Rewards（微软积分商城）自动任务脚本的**维护版**，�
 **判别位是版本段 `.2.U.` / `.0.U.`，不是 `MsaArtifacts`** —— 两者都含它。
 脚本（`credKind()`）按版本段分流，粘错类型也会自动纠正。
 
+> **优先粘 refresh token。** 授权码是一次性的、几分钟就过期，从你复制到脚本下一轮运行
+> （最长 20 分钟）之间大概率已经失效，会得到 `invalid_grant: code parameter is not valid`。
+> refresh token 长期有效且可重复刷新，粘一次就不用再管。
+
+脚本检测「有没有新粘贴」用的是**值指纹**（`Config.usedCode`），不是时间戳：
+ScriptCat 的设置面板保存时只写值、不更新 `Config.codeTime`，用时间戳判断永远失效。
+
 ### 自动捕获的原理
 
 脚本头部有一条内容脚本分支，只在 `login.live.com` 上激活：
