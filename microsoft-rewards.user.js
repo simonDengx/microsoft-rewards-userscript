@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.35
+// @version	3.7.37
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -47,6 +47,7 @@
 // @grant	GM_log
 // @grant	GM_registerMenuCommand
 // @grant	CAT_registerMenuInput
+// @grant	GM_listValues
 // @storageName	FuckScripts_Shared_Auth
 // @tips	此脚本一直为 开源免费 使用，如果你是从某些地方买的话，你就是被骗了
 // @license	GPL-3.0
@@ -709,23 +710,30 @@ FuckF.renewToken = async () => {
     // ⚠️ 用户主动粘贴的凭证必须优先于旧 token。
     // 之前只在「没有 refresh token」时才看 Config.code，于是用户明明粘了新值，
     // 脚本却继续用旧的 Config.token，日志里连一个字都不提——表现为「粘了没反应」。
-    // 判据：Config.codeTime 比 Config.tokenTime 新，说明用户最近一次动作是填授权码。
+    //
+    // ⚠️ 判据不能用时间戳：实测「设置 → Config → 授权码链接」保存时，ScriptCat 的
+    //    UserConfig 只写值，【不会更新 Config.codeTime】。所以 codeTime 永远停在
+    //    脚本上次自己写入的时刻，`codeTime > tokenTime` 恒为假，新粘贴永远不被采用。
+    //    正确判据是【值指纹】：记住上次实际用过的凭证（Config.usedCode），
+    //    只要 Config.code 里的值变了，就说明用户粘了新的。
     try {
         const codeRaw = String(GM_getValue("Config.code", "") || "");
-        const codeAt = Number(GM_getValue("Config.codeTime", 0)) || 0;
-        const tokAt = Number(GM_getValue("Config.tokenTime", 0)) || 0;
         const codeVal = (codeRaw.match(/M\.[^&\s]+/) || [])[0] || "";
-        if (codeVal && codeAt > tokAt) {
+        const usedVal = String(GM_getValue("Config.usedCode", "") || "");
+        if (codeVal && codeVal !== usedVal) {
             const k = /M\.[A-Z0-9_]+\.2\.U\./i.test(codeVal) ? "code" : (/M\.[A-Z0-9_]+\.0\.U\./i.test(codeVal) ? "refresh" : "unknown");
+            FuckF.log("🟡", `检测到新粘贴的凭证（${k}，${codeVal.slice(0, 14)}…），优先采用`);
             if (k === "refresh") {
-                FuckF.log("🟡", `授权码栏里是新粘贴的 refresh token，优先采用（覆盖旧 token）`);
                 GM_setValue("Config.token", codeVal);
                 GM_setValue("Config.tokenTime", Date.now());
                 refreshToken = codeVal;
-            } else if (k === "code") {
-                FuckF.log("🟡", `检测到新粘贴的授权码，优先用它换取 token（忽略旧 token）`);
+            } else {
+                // 授权码（含未识别格式）：清掉旧 token，走换码流程
+                GM_setValue("Config.token", false);
+                GM_setValue("Config.tokenTime", 0);
                 refreshToken = false;
             }
+            GM_setValue("Config.usedCode", codeVal);
         }
     } catch (e) {}
     // 脏数据自愈：3.7.29 把「含 MsaArtifacts」当成 refresh token 特征，
@@ -1000,6 +1008,9 @@ FuckF.renewToken = async () => {
             // 明确告诉用户原因和下一步。
             const err = GM_getValue("Config.lastTokenError", null);
             const reason = err ? `${err.error}${err.description ? " · " + String(err.description).slice(0, 80) : ""}` : "未知";
+            // 记下这条码已被微软拒绝：避免每轮 cron 都拿同一条死码去撞，
+            // 同时让「值指纹」判据不再把它当成新粘贴。
+            try { GM_setValue("Config.usedCode", codeMatch[0]); } catch (e) {}
             FuckD.bing.sendMSG = `授权码无效（${reason}）。授权码是一次性的：请在浏览器完成授权后，立刻复制地址栏里的 oauth20_desktop.srf?code=... 整条链接，用菜单「📋 粘贴授权码（输入框）」粘贴`;
             FuckF.log("🔴", FuckD.bing.sendMSG, true);
             FuckF.send(FuckD.wh);
@@ -1008,6 +1019,8 @@ FuckF.renewToken = async () => {
             return false;
         }
         GM_setValue("Config.lastAuthPrompt", 0);
+        // 记下这条码已经用过（一次性），下次不会再拿它重试
+        try { GM_setValue("Config.usedCode", codeMatch[0]); } catch (e) {}
         FuckD.bing.sendMSG = "Token 获取成功！";
         FuckF.log("🟢", FuckD.bing.sendMSG, true);
         FuckF.send(FuckD.wh);
@@ -3453,6 +3466,27 @@ const pasteInputReady = (() => { try { return registerPasteInput(); } catch (e) 
 try {
     GM_log(`[menu] GM_registerMenuCommand=${typeof GM_registerMenuCommand === "function" ? "有" : "无"} · CAT_registerMenuInput=${typeof CAT_registerMenuInput === "function" ? "有" : "无"} · 输入框已注册=${pasteInputReady}`);
 } catch (e) {}
+// 存储键诊断：用户在「设置 → Config → 授权码链接」里填的值到底落在哪个 key 上。
+// 现象是「用户保存了，但脚本读 Config.code 一直是空的」——
+// 必须把实际存在的键列出来，才能判断是 UserConfig 写到了别的前缀，还是根本没落盘。
+// 每个版本只在首次运行时打一次（用 Config.storageDumpedVersion 记住），不刷日志。
+try {
+    const dumpedVer = String(GM_getValue("Config.storageDumpedVersion", "") || "");
+    const curVer = String((GM_info && GM_info.script && GM_info.script.version) || "?");
+    if (dumpedVer !== curVer) {
+        GM_setValue("Config.storageDumpedVersion", curVer);
+        const keys = (typeof GM_listValues === "function") ? GM_listValues() : [];
+        GM_log(`[storage] 版本 ${curVer} · GM_listValues ${typeof GM_listValues === "function" ? "可用" : "不可用"} · 键数=${keys.length}`);
+        keys.filter(k => /code|token|Config|paste/i.test(k)).sort().forEach((k) => {
+            let v = "";
+            try { v = String(GM_getValue(k, "")); } catch (e) { v = "<读取失败>"; }
+            const m = (v.match(/M\.[^&\s]+/) || [])[0] || "";
+            GM_log(`[storage] ${k} = ${v.length}B${m ? " 凭证=" + m.slice(0, 16) + "…" : (v.length && v.length < 40 ? " " + v : "")}`);
+        });
+    }
+} catch (e) {
+    try { GM_log("[storage] 诊断异常：" + e.message); } catch (e2) {}
+}
 
 if (typeof GM_registerMenuCommand === 'function') {
     GM_registerMenuCommand("📋 粘贴授权码", () => {
