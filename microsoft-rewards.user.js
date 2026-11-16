@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.29
+// @version	3.7.31
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -78,7 +78,7 @@ Config:
     code:
         title: 授权码链接（请勿分享以免个人数据泄露）
         type: textarea
-        description: https://login.live.com/oauth20_desktop.srf?code=M.C540_BAY.2.U.********-****-****-****-************&...
+        description: https://login.live.com/oauth20_desktop.srf?code=M.C529_xxx.2.U.****（授权码，几分钟内有效）或 M.C529_xxx.0.U.****（refresh token，长期有效，推荐）
 Tasks:
     sign:
         title: 签入（Authorization Code）
@@ -706,7 +706,24 @@ FuckF.getToken = async (url, maxRetries = 3) => {
 FuckF.renewToken = async () => {
     if (!FuckD.tasks.sign && !FuckD.tasks.read && !FuckD.tasks.edge) return true;
     let refreshToken = GM_getValue("Config.token", false);
-    const authUrl = "https://login.live.com/oauth20_authorize.srf?client_id=0000000040170455&response_type=code&scope=service::prod.rewardsplatform.microsoft.com::MBI_SSL&redirect_uri=https://login.live.com/oauth20_desktop.srf";
+    // 脏数据自愈：3.7.29 把「含 MsaArtifacts」当成 refresh token 特征，
+    // 而真实授权码也含它，于是把有效的 .2.U. 授权码搬进了 Config.token。
+    // 那批用户会一直 invalid_grant。这里反向搬回 Config.code（.2.U. 才可能是码）。
+    if (refreshToken && /M\.[A-Z0-9_]+\.2\.U\./i.test(String(refreshToken))) {
+        const raw = String(refreshToken).match(/M\.[^&\s]+/);
+        if (raw) {
+            FuckF.log("🟡", `Config.token 里存的是授权码（.2.U.），已搬回 Config.code 重新换取 token`);
+            GM_setValue("Config.code", `https://login.live.com/oauth20_desktop.srf?code=${raw[0]}`);
+            GM_setValue("Config.codeTime", Date.now());
+            GM_setValue("Config.token", false);
+            refreshToken = false;
+        }
+    }
+    // ⚠️ 2026-11-16 实测：必须带 prompt=select_account，否则微软的会话复用判定
+    // 会直接把请求踢到 oauth20_desktop.srf?removed=true（"你已进入一个通常不会显示的页面"），
+    // 永远拿不到 code。之前误判成 redirect_uri 被拉黑，其实是缺这个参数。
+    // 加上后稳定落到「选择帐户」页，点一下帐户就跳 ?code=M.xxx。
+    const authUrl = "https://login.live.com/oauth20_authorize.srf?client_id=0000000040170455&response_type=code&scope=service::prod.rewardsplatform.microsoft.com::MBI_SSL&redirect_uri=https://login.live.com/oauth20_desktop.srf&prompt=select_account";
 
     const pollForAuthCodeFromWindow = (authWindow, maxSeconds) => {
         return new Promise((resolve) => {
@@ -899,7 +916,9 @@ FuckF.renewToken = async () => {
         };
 
         await new Promise(resolve => setTimeout(resolve, 2000));
-        FuckF.log("🟡", `请在打开的页面中完成登录授权，等待授权码...`);
+        // prompt=select_account 会先落到「选择帐户」页，需要点一下自己的头像才继续。
+        // 这一步只能人工点（点了才会跳 ?code=），所以提示写清楚。
+        FuckF.log("🟡", `请在打开的页面里点一下你的帐户（选择帐户页 → 点头像），随后会自动跳到 ?code=...`);
 
         FuckF.log("🟡", `等待授权码...请在打开的授权页面中完成登录`);
         let codeMatch = await pollForAuthCode(120, excludeCode);
@@ -930,13 +949,16 @@ FuckF.renewToken = async () => {
         let code = GM_getValue("Config.code", "");
         // 运行时纠错：用户可能通过「脚本设置 → Config → 授权码链接」直接粘贴，
         // 那条路径绕过了 applyPastedCode，不会区分类型。
-        // 若发现填的其实是 refresh token（MsaArtifacts 特征），自动搬进 Config.token 并清掉 code，
-        // 否则会一直拿它当 authorization code 用，每次都 invalid_grant。
+        // ⚠️ 判别位是版本段而不是 MsaArtifacts（授权码和 refresh token 都含它）：
+        //    .2.U. = 授权码（一次性），.0.U. = refresh token（长期）。
         const rawVal = (code.match(/M\.[^&\s]+/) || [])[0] || "";
-        if (rawVal && /MsaArtifacts/i.test(rawVal)) {
+        const looksRefresh = /M\.[A-Z0-9_]+\.0\.U\./i.test(rawVal);
+        if (rawVal && looksRefresh) {
             FuckF.log("🟡", `检测到授权码字段里填的是 refresh token（${rawVal.slice(0, 20)}…），已自动迁移到正确字段`);
             GM_setValue("Config.token", rawVal);
-            GM_setValue("Config.code", "");
+            // ⚠️ 不清空 Config.code：那一栏是用户在「脚本设置」里手填的，
+            //    清掉等于把用户刚粘贴的值删了（3.7.29 就是这么把有效授权码弄丢的）。
+            //    留着也不影响：走到这里说明 Config.token 已可用，下次直接走 refresh 分支。
             GM_setValue("Config.tokenTime", Date.now());
             // 迁移后直接按 refresh token 分支继续，不重复走 code 流程
             refreshToken = rawVal;
@@ -3245,7 +3267,9 @@ if (typeof GM_registerMenuCommand === 'function') {
     // 打开授权页面：浏览器已登录微软账号时，授权链接会自动跳转到 oauth20_desktop.srf?code=...，
     // 页面上的捕获分支会把 code 写进 Config.code，无需手动复制粘贴。
     GM_registerMenuCommand("🔑 打开授权页面", () => {
-        const u = "https://login.live.com/oauth20_authorize.srf?client_id=0000000040170455&response_type=code&scope=service::prod.rewardsplatform.microsoft.com::MBI_SSL&redirect_uri=https://login.live.com/oauth20_desktop.srf";
+        // prompt=select_account 是必需的，见 renewToken 里的实测注释：
+        // 少了它会被会话复用判定踢到 ?removed=true，拿不到 code。
+        const u = "https://login.live.com/oauth20_authorize.srf?client_id=0000000040170455&response_type=code&scope=service::prod.rewardsplatform.microsoft.com::MBI_SSL&redirect_uri=https://login.live.com/oauth20_desktop.srf&prompt=select_account";
         try {
             GM_setValue("Config.authFlowAt", Date.now());
             // 记下「等待中的授权」：后台脚本会轮询 Config.code，
@@ -3321,20 +3345,26 @@ if (typeof GM_registerMenuCommand === 'function') {
 
     // 统一的授权码写入逻辑，两个入口（原生输入框 / prompt）共用。
     // ⚠️ 必须区分两种凭证，否则会静默失败：
-    //   · authorization code：M.C529_SN1.2.U.…（一次性，换 token 用，几分钟过期）
-    //   · refresh token     ：M.C529_BL2.2.U.MsaArtifacts.…（长期，直接刷新 access token）
-    // 之前不区分，把 refresh token 写进 Config.code 当 code 用，微软返回 invalid_grant，
-    // 用户看到的是「授权码无效」，完全不知道粘错了类型。
+    //   · authorization code：M.C529_BAY.2.U.MsaArtifacts.…（一次性，换 token 用，几分钟过期）
+    //   · refresh token     ：M.C529_BAY.0.U.MsaArtifacts.…（长期，直接刷新 access token）
+    // ⚠️ 2026-11-16 实测纠正：两者【都】含 MsaArtifacts，靠它判别是错的
+    //    （3.7.29 就是这么判的，把有效授权码当成 refresh token，反而全部 invalid_grant）。
+    //    真正的判别位是版本段：.2.U. = 授权码，.0.U. = refresh token。
+    const credKind = (value) => {
+        if (/M\.[A-Z0-9_]+\.2\.U\./i.test(value)) return "code";
+        if (/M\.[A-Z0-9_]+\.0\.U\./i.test(value)) return "refresh";
+        if (/SN1\./i.test(value)) return "code";
+        return "unknown";
+    };
     const applyPastedCode = (raw) => {
         const text = String(raw || "").trim();
         if (!text) return "empty";
         const m = text.match(/M\.[^&\s]+/);
         if (!m) return "invalid";
         const value = m[0];
-        const isRefresh = /MsaArtifacts/i.test(value);
-        const isCode = /SN1\./i.test(value);
+        const kind = credKind(value);
 
-        if (isRefresh) {
+        if (kind === "refresh") {
             // refresh token：直接存进 Config.token，清掉 code（避免下次又拿它当 code 用）
             GM_setValue("Config.token", value);
             GM_setValue("Config.code", "");
@@ -3355,7 +3385,7 @@ if (typeof GM_registerMenuCommand === 'function') {
         GM_setValue("Config.codeManual", true);
         GM_setValue("Config.lastAuthPrompt", 0);
         GM_setValue("Config.lastTokenError", null);
-        return isCode ? "ok-code" : "ok-unknown";
+        return kind === "code" ? "ok-code" : "ok-unknown";
     };
 
     // 首选入口：ScriptCat 原生输入框。它不依赖页面 prompt（页面 CSP 可能拦 prompt），
@@ -3369,10 +3399,10 @@ if (typeof GM_registerMenuCommand === 'function') {
                     msg = "已识别为 refresh token，已保存。下一轮运行会直接用它刷新，无需再授权";
                     try { GM_log("🟢 已保存 refresh token（输入框）"); } catch (e) {}
                 } else if (r === "ok-code") {
-                    msg = "已识别为授权码（SN1），已保存。下一轮运行会立刻换取 token";
+                    msg = "已识别为授权码（.2.U.），已保存。下一轮运行会立刻换取 token";
                     try { GM_log("🟢 授权码已手动更新（输入框）"); } catch (e) {}
                 } else if (r === "ok-unknown") {
-                    msg = "已按授权码保存，但格式无法识别（既不是 SN1 也不是 MsaArtifacts），可能无效";
+                    msg = "已按授权码保存，但版本段无法识别（既不是 .2.U. 也不是 .0.U.），可能无效";
                     try { GM_log("🟡 已保存未识别格式的凭证（输入框）"); } catch (e) {}
                 } else if (r === "invalid") {
                     msg = "未识别到凭证（应以 M. 开头），请重试";
@@ -3383,15 +3413,15 @@ if (typeof GM_registerMenuCommand === 'function') {
             }, {
                 inputType: "text",
                 title: "粘贴授权码或 refresh token",
-                inputLabel: "M. 开头的授权码（SN1）或 refresh token（MsaArtifacts）",
-                inputPlaceholder: "https://login.live.com/oauth20_desktop.srf?code=M... 或 M.C529_BL2.2...",
+                inputLabel: "授权码（M.C529_xxx.2.U.…）或 refresh token（M.C529_xxx.0.U.…）",
+                inputPlaceholder: "https://login.live.com/oauth20_desktop.srf?code=M...",
             });
         } catch (e) {}
     }
 
     GM_registerMenuCommand("📋 粘贴授权码", () => {
         let text = null;
-        try { text = prompt("请粘贴授权码（M.C529_SN1...）或 refresh token（M.C529_BL2.2...），也可粘完整 URL："); } catch (e) { text = null; }
+        try { text = prompt("请粘贴授权码（M.C529_xxx.2.U.…）或 refresh token（M.C529_xxx.0.U.…），也可粘完整 URL："); } catch (e) { text = null; }
         if (text == null) {
             GM_notification({
                 text: "当前环境不支持弹窗输入，请把授权码链接粘贴到脚本设置 → Config → 授权码链接",

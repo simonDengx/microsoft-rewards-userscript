@@ -162,13 +162,20 @@ Microsoft Rewards（微软积分商城）自动任务脚本的**维护版**，�
 
 ### 三种获取方式
 
-**方式 A：全自动（推荐，浏览器已登录微软账号时）**
+**方式 A：半自动（推荐）**
 
 脚本菜单 → `🔑 打开授权页面`。
 
-因为浏览器已登录，授权链接会**直接跳转**到 `login.live.com/oauth20_desktop.srf?code=...`，页面上的捕获分支立刻把 code 写入 `Config.code`，并清空旧 token。下一次定时运行（最多 20 分钟）会自动用这个 code 换新 token。
+授权链接带 `prompt=select_account`，会落到微软的**「选择帐户」页** —— 点一下你自己的帐户头像，页面立刻跳到
+`login.live.com/oauth20_desktop.srf?code=M.C529_xxx.2.U.xxx`。
 
-> 若浏览器未登录，会停在微软登录框——这时必须先手动登录一次，登录完成后同样会自动捕获，不需要复制。
+> **为什么必须带 `prompt=select_account`**：浏览器里已有微软会话时，不带 `prompt` 的授权请求会被
+> 会话复用判定踢到 `oauth20_desktop.srf?removed=true`（"你已进入一个通常不会显示的页面"），永远拿不到 code。
+> 这是 3.7.28 误判成「redirect_uri 被拉黑」的真正原因，3.7.31 已修正。
+
+拿到 code 后，用菜单 `📋 粘贴授权码（输入框）` 粘进去（整条 URL 或只粘 `M.` 开头的值都行）。
+
+> 自动捕获在本机不生效（见下方 CSP 说明），所以「点帐户 → 复制地址栏 → 粘贴」是当前主路径。
 
 **方式 B：定时运行自动触发**
 
@@ -184,6 +191,16 @@ Microsoft Rewards（微软积分商城）自动任务脚本的**维护版**，�
 - 只有 code 本身：`M.C5xx...`
 
 也可以在脚本设置 → `Config` → `授权码链接` 里填写。
+
+### 两种凭证的区别
+
+| 类型 | 形态 | 长度 | 有效期 | 用途 |
+|---|---|---|---|---|
+| 授权码 | `M.C529_xxx.2.U.MsaArtifacts.…` | ~672 | 几分钟，一次性 | `grant_type=authorization_code` 换 token |
+| refresh token | `M.C529_xxx.0.U.MsaArtifacts.…` | 373 | 长期 | `grant_type=REFRESH_TOKEN` 直接刷新 |
+
+**判别位是版本段 `.2.U.` / `.0.U.`，不是 `MsaArtifacts`** —— 两者都含它。
+脚本（`credKind()`）按版本段分流，粘错类型也会自动纠正。
 
 ### 自动捕获的原理
 

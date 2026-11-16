@@ -1,5 +1,62 @@
 # 变更记录
 
+## 3.7.31
+
+**两个真实根因：授权 URL 缺 `prompt=select_account` + 凭证类型判别反了。**
+
+### 根因 1：`?removed=true` 不是 redirect_uri 被拉黑，是缺 `prompt=select_account`
+
+3.7.28 曾判定 redirect_uri 被微软拉黑，**该结论错误**。实测对照：
+
+| 授权 URL 变体 | 结果 |
+|---|---|
+| 基线（无 prompt） | `oauth20_desktop.srf?removed=true` |
+| `&prompt=consent` | `?removed=true` |
+| `&prompt=none` | `?removed=true` |
+| `&prompt=select_account` | **落到「选择帐户」页，点帐户即得 `?code=M.xxx`** |
+| `&prompt=login` | 落到「发送邮件验证码」页（需二次验证，绕远路） |
+| `redirect_uri=oauth20_nativeclient.srf` | `invalid_request`（该 URI 确实未注册） |
+
+所以是微软的**会话复用判定**：浏览器里已有会话时，不带 `prompt` 的授权请求会被
+安全策略踢到 `?removed=true`。加 `prompt=select_account` 强制走一次帐户选择，正常发码。
+
+### 根因 2：`MsaArtifacts` 不能用来区分授权码和 refresh token
+
+3.7.29 的判断是反的。实测两种凭证的完整结构：
+
+| 类型 | 形态 | 长度 |
+|---|---|---|
+| authorization code | `M.C529_BAY.2.U.MsaArtifacts.<payload>` | ~672 |
+| refresh token | `M.C529_SN1.0.U.MsaArtifacts.<payload>` | 373 |
+
+**两者都含 `MsaArtifacts`**。真正的判别位是版本段：`.2.U.` = 授权码，`.0.U.` = refresh token。
+
+3.7.29 把所有含 `MsaArtifacts` 的值判成 refresh token，导致：
+
+1. 有效授权码被搬进 `Config.token`，按 `grant_type=REFRESH_TOKEN` 用 → 必然 `invalid_grant`
+2. 迁移分支 `GM_setValue("Config.code", "")` 把用户在设置里刚粘贴的值清空 → **「保存没成功」**
+3. 判别条件对真实授权码恒真，每次粘贴都被搬走清空，永远配不好
+
+### 修复
+
+- 授权 URL（`renewToken` 与「🔑 打开授权页面」菜单）统一加 `&prompt=select_account`
+- 新增 `credKind()`，按 `.2.U.` / `.0.U.` 判别，取代 `MsaArtifacts` 特征
+- `renewToken` 迁移分支不再清空 `Config.code`（那是用户手填的字段）
+- 新增脏数据自愈：`Config.token` 里若发现 `.2.U.` 授权码，反向搬回 `Config.code`
+- 设置项 `Config.code` 的说明改为两种凭证的真实格式
+- 自动授权提示改为「点一下你的帐户」，与实际流程一致
+
+### 端到端实测
+
+```
+prompt=select_account → 选择帐户页 → 点帐户 → ?code=M.C529_BAY.2.U.MsaArtifacts...
+code → POST oauth20_token.srf (authorization_code) → 200，access_token 1292 字节
+refresh_token → POST oauth20_token.srf (REFRESH_TOKEN) → 200，access_token 1312 字节，refresh 正常轮换
+access_token → GET prod.rewardsplatform.microsoft.com/dapi/me → 200，balance = 15269
+```
+
+3.7.31 装入后连续两轮运行日志中**不再出现 `Token 被拒绝`**。
+
 ## 3.7.29
 
 **修复：粘贴凭证时未区分类型，refresh token 被当成授权码用。**
