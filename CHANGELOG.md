@@ -1,5 +1,22 @@
 # 变更记录
 
+## 3.7.27
+
+授权失败时的错误处理修正（此前会把真实原因掩盖成「请检查网络连接」）：
+
+- **`getToken` 区分错误类型**：微软在 code 无效时返回 400 + `{"error":"invalid_grant",...}`，
+  原实现只判 400 就 `return false`，日志只写「Token 请求失败」，用户完全看不到「code 无效」。
+  现在会提取 `error` / `error_description` 写进日志，并存入 `Config.lastTokenError`
+- **消除无限重试**：`renewToken` 在 code 被拒后会再调 `fetchCodeLogic` 开授权页，失败后再递归调自己。
+  已改为只尝试一次，失败就明确报错退出
+- **不再用笼统文案覆盖**：`tasksStart` 里「Token 请求失败，请检查网络连接」会在 `renewToken` 已写明
+  具体原因时跳过，避免误导
+- 「检查授权状态」菜单新增 `Token 拒绝` 行，显示最近一次被拒原因与时间
+
+实测发现（非脚本问题）：用 sctl 打开 `oauth20_authorize.srf` 会跳到 `?removed=true` 安全提示页，
+内容是「你已进入一个通常不会显示的页面。Microsoft 绝不会要求你复制或分享此 URL」。
+因此必须在浏览器里正常点击授权链接完成流程，不要用工具直接打开该 URL。
+
 ## 3.7.25
 
 实测确认：**自动捕获授权码在 login.live.com 上从未生效**。
