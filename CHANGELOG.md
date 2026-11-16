@@ -1,5 +1,34 @@
 # 变更记录
 
+## 3.7.28
+
+**授权通道实测结论：`redirect_uri=https://login.live.com/oauth20_desktop.srf` 已被微软拉黑。**
+
+对照实验（同一浏览器、已登录状态）：
+
+| 请求 | 结果 |
+|---|---|
+| `oauth20_authorize.srf?...&redirect_uri=https://login.live.com/oauth20_desktop.srf` | 跳到 `?removed=true` 安全提示页 |
+| `oauth20_authorize.srf?...`（不带 redirect_uri） | 正常返回 `invalid_request`（接口存活） |
+| `oauth20_desktop.srf` 裸访问 | 200，正常页面 |
+| Node 直连 authorize URL | 200，正常 HTML |
+
+结论：接口和 client_id 都正常，是 **redirect_uri 被判定为不安全**。
+`?removed=true` 页面文案为「你已进入一个通常不会显示的页面。Microsoft 绝不会要求你复制或分享此 URL」——
+这是微软对「把 code 显示在 URL 里」这类 legacy 流程的安全提示，属于站点侧策略变更。
+
+影响：
+
+- 授权码换 token 的整条链路（签入 15 分 + 阅读 30 分）不可用
+- 历史上 7 天内没有一次「Token 获取成功」，说明该通道早已失效，不是本次改动引入
+- 不依赖 token 的通道（dapi 收割、PC 搜索）仍正常，今日站方统计 +141 分
+
+本次仅做可观测性改进，不再尝试修复不可修的站点限制：
+
+- `getToken` 明确区分「微软拒绝」与「网络异常」，输出 `invalid_grant` 等真实原因
+- `renewToken` 去掉递归重试，避免反复弹授权页
+- 「检查授权状态」菜单新增 `Token 拒绝` 行
+
 ## 3.7.27
 
 授权失败时的错误处理修正（此前会把真实原因掩盖成「请检查网络连接」）：
