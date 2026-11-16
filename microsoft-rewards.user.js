@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.28
+// @version	3.7.29
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -928,6 +928,19 @@ FuckF.renewToken = async () => {
     };
     if (!refreshToken) {
         let code = GM_getValue("Config.code", "");
+        // 运行时纠错：用户可能通过「脚本设置 → Config → 授权码链接」直接粘贴，
+        // 那条路径绕过了 applyPastedCode，不会区分类型。
+        // 若发现填的其实是 refresh token（MsaArtifacts 特征），自动搬进 Config.token 并清掉 code，
+        // 否则会一直拿它当 authorization code 用，每次都 invalid_grant。
+        const rawVal = (code.match(/M\.[^&\s]+/) || [])[0] || "";
+        if (rawVal && /MsaArtifacts/i.test(rawVal)) {
+            FuckF.log("🟡", `检测到授权码字段里填的是 refresh token（${rawVal.slice(0, 20)}…），已自动迁移到正确字段`);
+            GM_setValue("Config.token", rawVal);
+            GM_setValue("Config.code", "");
+            GM_setValue("Config.tokenTime", Date.now());
+            // 迁移后直接按 refresh token 分支继续，不重复走 code 流程
+            refreshToken = rawVal;
+        } else {
         let codeMatch = code ? code.match(/M\.[^&]+/) : null;
         if (!codeMatch) {
             codeMatch = await fetchCodeLogic("检测到授权码为空");
@@ -955,7 +968,10 @@ FuckF.renewToken = async () => {
         FuckF.log("🟢", FuckD.bing.sendMSG, true);
         FuckF.send(FuckD.wh);
         return true;
-    } else {
+        }   // end else (授权码分支)
+    }
+    // refresh token 分支：可能是原有 token，也可能是上面从 Config.code 迁移过来的
+    {
         const url = `https://login.live.com/oauth20_token.srf?client_id=0000000040170455&refresh_token=${encodeURIComponent(refreshToken)}&scope=service::prod.rewardsplatform.microsoft.com::MBI_SSL&grant_type=REFRESH_TOKEN`;
         const token = await FuckF.getToken(url);
         if (token === null) return false;
@@ -3303,22 +3319,43 @@ if (typeof GM_registerMenuCommand === 'function') {
         try { GM_notification({ text: info, title: GM_info.script.name, onclick: () => {} }); } catch (e) {}
     });
 
-    // 统一的授权码写入逻辑，两个入口（原生输入框 / prompt）共用
+    // 统一的授权码写入逻辑，两个入口（原生输入框 / prompt）共用。
+    // ⚠️ 必须区分两种凭证，否则会静默失败：
+    //   · authorization code：M.C529_SN1.2.U.…（一次性，换 token 用，几分钟过期）
+    //   · refresh token     ：M.C529_BL2.2.U.MsaArtifacts.…（长期，直接刷新 access token）
+    // 之前不区分，把 refresh token 写进 Config.code 当 code 用，微软返回 invalid_grant，
+    // 用户看到的是「授权码无效」，完全不知道粘错了类型。
     const applyPastedCode = (raw) => {
         const text = String(raw || "").trim();
         if (!text) return "empty";
         const m = text.match(/M\.[^&\s]+/);
         if (!m) return "invalid";
-        // 允许粘贴完整 URL，也允许只粘贴 M.xxx 这一段
+        const value = m[0];
+        const isRefresh = /MsaArtifacts/i.test(value);
+        const isCode = /SN1\./i.test(value);
+
+        if (isRefresh) {
+            // refresh token：直接存进 Config.token，清掉 code（避免下次又拿它当 code 用）
+            GM_setValue("Config.token", value);
+            GM_setValue("Config.code", "");
+            GM_setValue("Config.tokenTime", Date.now());
+            GM_setValue("Config.codeManual", true);
+            GM_setValue("Config.lastAuthPrompt", 0);
+            GM_setValue("Config.lastTokenError", null);
+            return "ok-refresh";
+        }
+
+        // 授权码（或未知类型，按 code 处理并给出提示）
         const full = /oauth20_desktop\.srf/i.test(text)
             ? text
-            : `https://login.live.com/oauth20_desktop.srf?code=${m[0]}`;
+            : `https://login.live.com/oauth20_desktop.srf?code=${value}`;
         GM_setValue("Config.code", full);
         GM_setValue("Config.token", false);
         GM_setValue("Config.codeTime", Date.now());
         GM_setValue("Config.codeManual", true);
-        GM_setValue("Config.lastAuthPrompt", 0);   // 清掉冷却，下次运行立刻换 token
-        return "ok";
+        GM_setValue("Config.lastAuthPrompt", 0);
+        GM_setValue("Config.lastTokenError", null);
+        return isCode ? "ok-code" : "ok-unknown";
     };
 
     // 首选入口：ScriptCat 原生输入框。它不依赖页面 prompt（页面 CSP 可能拦 prompt），
@@ -3328,27 +3365,33 @@ if (typeof GM_registerMenuCommand === 'function') {
             CAT_registerMenuInput("📋 粘贴授权码（输入框）", (value) => {
                 const r = applyPastedCode(value);
                 let msg;
-                if (r === "ok") {
-                    msg = "授权码已保存，下一轮运行会立刻换取 token";
+                if (r === "ok-refresh") {
+                    msg = "已识别为 refresh token，已保存。下一轮运行会直接用它刷新，无需再授权";
+                    try { GM_log("🟢 已保存 refresh token（输入框）"); } catch (e) {}
+                } else if (r === "ok-code") {
+                    msg = "已识别为授权码（SN1），已保存。下一轮运行会立刻换取 token";
                     try { GM_log("🟢 授权码已手动更新（输入框）"); } catch (e) {}
+                } else if (r === "ok-unknown") {
+                    msg = "已按授权码保存，但格式无法识别（既不是 SN1 也不是 MsaArtifacts），可能无效";
+                    try { GM_log("🟡 已保存未识别格式的凭证（输入框）"); } catch (e) {}
                 } else if (r === "invalid") {
-                    msg = "未识别到授权码（应以 M. 开头），请重试";
+                    msg = "未识别到凭证（应以 M. 开头），请重试";
                 } else {
                     msg = "输入为空";
                 }
                 try { GM_notification({ text: msg, title: GM_info.script.name, onclick: () => {} }); } catch (e) {}
             }, {
                 inputType: "text",
-                title: "粘贴授权码",
-                inputLabel: "授权码链接或 M. 开头的码",
-                inputPlaceholder: "https://login.live.com/oauth20_desktop.srf?code=M...",
+                title: "粘贴授权码或 refresh token",
+                inputLabel: "M. 开头的授权码（SN1）或 refresh token（MsaArtifacts）",
+                inputPlaceholder: "https://login.live.com/oauth20_desktop.srf?code=M... 或 M.C529_BL2.2...",
             });
         } catch (e) {}
     }
 
     GM_registerMenuCommand("📋 粘贴授权码", () => {
         let text = null;
-        try { text = prompt("请粘贴授权码链接（完整 URL）或授权码本身："); } catch (e) { text = null; }
+        try { text = prompt("请粘贴授权码（M.C529_SN1...）或 refresh token（M.C529_BL2.2...），也可粘完整 URL："); } catch (e) { text = null; }
         if (text == null) {
             GM_notification({
                 text: "当前环境不支持弹窗输入，请把授权码链接粘贴到脚本设置 → Config → 授权码链接",
@@ -3359,15 +3402,16 @@ if (typeof GM_registerMenuCommand === 'function') {
         }
         const r = applyPastedCode(text);
         if (r === "invalid") {
-            GM_notification({ text: "未识别到授权码（应以 M. 开头），请重试", title: GM_info.script.name, onclick: () => {} });
+            GM_notification({ text: "未识别到凭证（应以 M. 开头），请重试", title: GM_info.script.name, onclick: () => {} });
             return;
         }
-        GM_notification({
-            text: "授权码已更新，脚本将在下一次运行（最多 20 分钟）时换取新 token",
-            title: GM_info.script.name,
-            onclick: () => {}
-        });
-        FuckF.log("🟢", "授权码已手动更新");
+        const msg = r === "ok-refresh"
+            ? "已识别为 refresh token 并保存，下一轮运行直接刷新"
+            : (r === "ok-code"
+                ? "已识别为授权码并保存，下一轮运行换取 token"
+                : "已按授权码保存，但格式无法识别，可能无效");
+        GM_notification({ text: msg, title: GM_info.script.name, onclick: () => {} });
+        FuckF.log(r === "ok-refresh" ? "🟢" : "🟡", msg);
     });
 }
 

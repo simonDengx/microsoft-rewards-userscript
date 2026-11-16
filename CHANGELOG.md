@@ -1,5 +1,30 @@
 # 变更记录
 
+## 3.7.29
+
+**修复：粘贴凭证时未区分类型，refresh token 被当成授权码用。**
+
+用户从「脚本设置 → Config → 授权码链接」粘贴 `M.C529_SN1.2.U.MsaArtifacts...`，
+脚本把它写进 `Config.code` 并按 authorization code 使用，微软返回 `invalid_grant`，
+日志显示「授权码无效」——用户完全不知道是类型填错了。
+
+两种凭证特征：
+
+| 类型 | 特征 | 用途 |
+|---|---|---|
+| authorization code | `M.C529_SN1.2.U...` | 一次性，`grant_type=authorization_code` |
+| refresh token | 含 `MsaArtifacts` | 长期，`grant_type=REFRESH_TOKEN` |
+
+修复内容：
+
+- `applyPastedCode` 按特征分流：含 `MsaArtifacts` → 写入 `Config.token`；否则按授权码处理
+- 两个入口的提示文案区分「已识别为 refresh token / 授权码 / 未识别格式」
+- `renewToken` 增加运行时纠错：即使通过设置页绕过 `applyPastedCode` 直接填了 refresh token，
+  也会自动迁移到 `Config.token` 并继续刷新，不会反复 `invalid_grant`
+
+实测验证：日志输出「检测到授权码字段里填的是 refresh token，已自动迁移到正确字段」，迁移生效。
+但用户手上这个 refresh token 本身已失效（迁移后仍 `invalid_grant`），需要重新获取。
+
 ## 3.7.28
 
 **授权通道实测结论：`redirect_uri=https://login.live.com/oauth20_desktop.srf` 已被微软拉黑。**
