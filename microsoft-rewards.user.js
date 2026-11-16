@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.20
+// @version	3.7.22
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -805,10 +805,14 @@ FuckF.renewToken = async () => {
             FuckF.log("🟡", `${msg}，但 ${left} 分钟内已尝试过自动授权，本次不再打开页面。请手动点击脚本菜单「🔑 打开授权页面」完成授权`);
             return null;
         }
-        // 记录旧授权码：清空只影响存储，轮询时用它过滤残留的失效旧码
-        const oldCodeMatch = (GM_getValue("Config.code", "") || "").match(/M\.[^&]+/);
+        // 记录旧授权码：轮询时用它过滤残留的失效旧码。
+        // ⚠️ 绝不能在这里 GM_setValue("Config.code", "")：
+        //    之前就是这么写的，结果自动授权超时后「原授权码 + 原 refresh token」双双被清空，
+        //    用户刚粘贴的新码 62 秒后就被脚本自己删掉，所有任务随之跳过。
+        //    正确做法是保留旧值，只在真的拿到新码时才覆盖（登录页捕获分支会写）。
+        const oldCodeRaw = GM_getValue("Config.code", "") || "";
+        const oldCodeMatch = oldCodeRaw.match(/M\.[^&]+/);
         const excludeCode = oldCodeMatch ? oldCodeMatch[0] : "";
-        GM_setValue("Config.code", "");
         GM_setValue("Config.lastAuthPrompt", Date.now());
         // 标记授权流程：登录页据此判断标签页是脚本打开的，捕获后可自动关闭
         GM_setValue("Config.authFlowAt", Date.now());
@@ -870,8 +874,10 @@ FuckF.renewToken = async () => {
         const token = await FuckF.getToken(url);
         if (token === null) return false;
         if (!token) {
+            // refresh token 已失效。这里同样不能顺手清 Config.code：
+            // 授权码可能仍然有效（refresh token 过期不等于 code 过期），清掉会让下次运行
+            // 连重试的机会都没有。只标记 token 失效，交给 fetchCodeLogic 决定是否重新授权。
             GM_setValue("Config.token", false);
-            GM_setValue("Config.code", "");
             const codeMatch = await fetchCodeLogic("检测到 Token 失效");
             if (!codeMatch) return false;
             return await FuckF.renewToken();
@@ -3142,34 +3148,46 @@ if (typeof GM_registerMenuCommand === 'function') {
 
     // 授权状态自检：把当前存储里的关键状态打印到日志，便于判断是「没码」还是「码失效」
     GM_registerMenuCommand("🔍 检查授权状态", () => {
+        let text = "";
         try {
             const code = GM_getValue("Config.code", "") || "";
             const token = GM_getValue("Config.token", "") || "";
             const codeM = code.match(/M\.[^&]+/);
             const t = GM_getValue("Config.codeTime", 0);
             const when = t ? new Date(t).toLocaleString() : "未知";
+            const err = GM_getValue("Config.lastAuthError", null);
+            const errLine = err ? `最近错误: ${err.error} ${String(err.description || "").slice(0, 40)}` : "最近错误: 无";
             const lines = [
                 `授权码: ${codeM ? "有（" + codeM[0].slice(0, 12) + "…）" : "无"}`,
                 `获取时间: ${when}`,
                 `refresh token: ${token ? "有（" + String(token).length + " 字节）" : "无（下次运行会重新换码）"}`,
                 `授权来源: ${GM_getValue("Config.codeManual", false) ? "手动打开" : "脚本打开"}`,
-                (() => { const e = GM_getValue("Config.lastAuthError", null); return e ? `最近错误: ${e.error} ${String(e.description || "").slice(0, 40)}` : "最近错误: 无"; })()
-                `脚本版本: ${GM_info.script.version || "?"}`
+                errLine,
+                `脚本版本: ${GM_info.script.version || "?"}`,
             ];
-            GM_log("[auth] === 授权状态 ===\n" + lines.join("\n"));
-            GM_notification({ text: lines.join("\n"), title: GM_info.script.name, onclick: () => {} });
-        } catch (e) {}
+            text = lines.join("\n");
+        } catch (e) {
+            text = "读取状态失败：" + e.message;
+        }
+        // 三个通道同时输出：日志（sctl logs 可查）、通知（浏览器可见）、存储（下次运行可回读）
+        try { GM_log("[auth] === 授权状态 ===\n" + text); } catch (e) {}
+        try { GM_setValue("Config.lastMenuResult", { what: "authStatus", text, ts: Date.now() }); } catch (e) {}
+        try { GM_notification({ text, title: GM_info.script.name, onclick: () => {} }); } catch (e) {}
     });
 
     // 手动解除运行锁：实例被强杀后锁最多残留 3 分钟，急用时可以立刻清掉
     GM_registerMenuCommand("🔓 解除运行锁", () => {
+        let info = "";
         try {
             const at = Number(GM_getValue("Config.runLock", 0)) || 0;
             GM_setValue("Config.runLock", 0);
-            const info = at ? `已清除（原时间 ${new Date(at).toLocaleTimeString()}）` : "当前没有锁";
-            GM_log("[lock] " + info);
-            GM_notification({ text: info, title: GM_info.script.name, onclick: () => {} });
-        } catch (e) {}
+            info = at ? `已清除（原时间 ${new Date(at).toLocaleTimeString()}）` : "当前没有锁";
+        } catch (e) {
+            info = "解除失败：" + e.message;
+        }
+        try { GM_log("[lock] " + info); } catch (e) {}
+        try { GM_setValue("Config.lastMenuResult", { what: "unlock", text: info, ts: Date.now() }); } catch (e) {}
+        try { GM_notification({ text: info, title: GM_info.script.name, onclick: () => {} }); } catch (e) {}
     });
 
     GM_registerMenuCommand("📋 粘贴授权码", () => {
