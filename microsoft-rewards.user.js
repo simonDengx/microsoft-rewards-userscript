@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.25
+// @version	3.7.27
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -644,29 +644,59 @@ FuckF.getRandomApiHot = () => {
     return filteredArr[randomIndex]
 }
 
+// 用授权码 / refresh token 换取 access token。
+// 返回值：true = 成功；false = 微软明确拒绝（invalid_grant 等，重试无意义）；null = 网络/未知错误
+//
+// ⚠️ 关键：微软在 code 无效时返回 HTTP 400 + {"error":"invalid_grant", ...}，
+//    xhr 抛出的错误信息里带这段 JSON。原实现只判 400/401 就 return false，
+//    但调用方拿 false 会再去 fetchCodeLogic 开授权页，日志也只写「Token 请求失败」，
+//    完全看不到「code 无效」这个真实原因——排查时等于瞎子。
+//    这里把 error / error_description 提出来写进日志，并标记为「明确拒绝」。
 FuckF.getToken = async (url, maxRetries = 3) => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const result = await FuckF.xhr({ url: url });
             if (result && FuckF.isJSON(result)) {
                 const res = JSON.parse(result);
+                // 微软也可能返回 200 + {"error":"..."}，这种同样要当失败处理
+                if (res.error) {
+                    FuckF.log("🔴", `Token 被拒绝：${res.error}${res.error_description ? " · " + String(res.error_description).slice(0, 80) : ""}`);
+                    GM_setValue("Config.lastTokenError", {
+                        error: res.error,
+                        description: String(res.error_description || "").slice(0, 200),
+                        ts: Date.now(),
+                    });
+                    return false;
+                }
                 const refresh = res.refresh_token;
                 const access = res.access_token;
                 if (refresh && access) {
                     GM_setValue("Config.token", refresh);
                     FuckD.bing.token = access;
+                    GM_setValue("Config.lastTokenError", null);
                     return true;
                 }
+                FuckF.log("🟡", `Token 响应缺少字段：${Object.keys(res).join(",").slice(0, 120)}`);
+            } else {
+                FuckF.log("🟡", `Token 响应不是 JSON：${String(result).slice(0, 120)}`);
             }
+            return false;
         } catch (e) {
-            if (e.message.includes("400") || e.message.includes("401")) {
-                return false;
+            const msg = String(e.message || "");
+            // 微软的明确拒绝（code/token 无效）：把 error_description 挖出来，不要笼统说「请求失败」
+            const m = msg.match(/"error"\s*:\s*"([^"]+)"[\s\S]*?"error_description"\s*:\s*"([^"]*)"/);
+            if (m || msg.includes("400") || msg.includes("401")) {
+                const code = m ? m[1] : "http_" + (msg.match(/状态码：(\d+)/) || [])[1];
+                const desc = m ? m[2] : msg.slice(0, 120);
+                FuckF.log("🔴", `Token 被拒绝：${code}${desc ? " · " + desc.slice(0, 100) : ""}`);
+                GM_setValue("Config.lastTokenError", { error: code, description: desc.slice(0, 200), ts: Date.now() });
+                return false;   // 明确拒绝，重试无意义
             }
             if (attempt < maxRetries) {
                 await new Promise(resolve => setTimeout(resolve, 3210));
                 continue;
             }
-            FuckF.log("🔴", `Token 请求失败！🔛${e.message}`);
+            FuckF.log("🔴", `Token 请求网络异常：${msg.slice(0, 150)}`);
             return null;
         }
     }
@@ -907,9 +937,18 @@ FuckF.renewToken = async () => {
         const token = await FuckF.getToken(url);
         if (token === null) return false;
         if (!token) {
-            codeMatch = await fetchCodeLogic("检测到授权码失效");
-            if (!codeMatch) return false;
-            return await FuckF.renewToken();
+            // 微软明确拒绝了这个 code（通常是 invalid_grant：code 已被用过或已过期）。
+            // 不要把用户再拖去开授权页——之前就是这样无限循环，日志还只写「Token 请求失败」。
+            // 这里保留 code 不清空（可能用户手滑粘了旧码，重新粘一条新的即可），
+            // 明确告诉用户原因和下一步。
+            const err = GM_getValue("Config.lastTokenError", null);
+            const reason = err ? `${err.error}${err.description ? " · " + String(err.description).slice(0, 80) : ""}` : "未知";
+            FuckD.bing.sendMSG = `授权码无效（${reason}）。授权码是一次性的：请在浏览器完成授权后，立刻复制地址栏里的 oauth20_desktop.srf?code=... 整条链接，用菜单「📋 粘贴授权码（输入框）」粘贴`;
+            FuckF.log("🔴", FuckD.bing.sendMSG, true);
+            FuckF.send(FuckD.wh);
+            FuckD.tasks.sign = false;
+            FuckD.tasks.read = false;
+            return false;
         }
         GM_setValue("Config.lastAuthPrompt", 0);
         FuckD.bing.sendMSG = "Token 获取成功！";
@@ -921,13 +960,26 @@ FuckF.renewToken = async () => {
         const token = await FuckF.getToken(url);
         if (token === null) return false;
         if (!token) {
-            // refresh token 已失效。这里同样不能顺手清 Config.code：
-            // 授权码可能仍然有效（refresh token 过期不等于 code 过期），清掉会让下次运行
-            // 连重试的机会都没有。只标记 token 失效，交给 fetchCodeLogic 决定是否重新授权。
+            // refresh token 已失效。不清 Config.code（refresh token 过期不等于 code 过期），
+            // 但要避免「开授权页 → 失败 → 再递归 renewToken → 再开授权页」的无限循环。
+            // 这里只尝试一次自动授权；拿不到就明确报错退出，让用户手动粘贴。
             GM_setValue("Config.token", false);
-            const codeMatch = await fetchCodeLogic("检测到 Token 失效");
+            const err = GM_getValue("Config.lastTokenError", null);
+            const reason = err ? `${err.error}` : "refresh token 失效";
+            const codeMatch = await fetchCodeLogic(`检测到 Token 失效（${reason}）`);
             if (!codeMatch) return false;
-            return await FuckF.renewToken();
+            // 直接用手上的新 code 换一次 token，不再递归（递归会重新走整个 refresh 分支）
+            const newUrl = `https://login.live.com/oauth20_token.srf?client_id=0000000040170455&code=${encodeURIComponent(codeMatch[0])}&redirect_uri=https://login.live.com/oauth20_desktop.srf&grant_type=authorization_code`;
+            const ok = await FuckF.getToken(newUrl);
+            if (ok) {
+                GM_setValue("Config.lastAuthPrompt", 0);
+                return true;
+            }
+            const err2 = GM_getValue("Config.lastTokenError", null);
+            FuckD.bing.sendMSG = `重新授权失败（${err2 ? err2.error : "未知"}）。授权码一次性有效，请重新完成授权后立刻粘贴`;
+            FuckF.log("🔴", FuckD.bing.sendMSG, true);
+            FuckF.send(FuckD.wh);
+            return false;
         }
         GM_setValue("Config.lastAuthPrompt", 0);
         return true;
@@ -3213,12 +3265,17 @@ if (typeof GM_registerMenuCommand === 'function') {
             const when = t ? new Date(t).toLocaleString() : "未知";
             const err = GM_getValue("Config.lastAuthError", null);
             const errLine = err ? `最近错误: ${err.error} ${String(err.description || "").slice(0, 40)}` : "最近错误: 无";
+            const tokErr = GM_getValue("Config.lastTokenError", null);
+            const tokErrLine = tokErr
+                ? `Token 拒绝: ${tokErr.error} ${String(tokErr.description || "").slice(0, 60)}（${new Date(tokErr.ts).toLocaleTimeString()}）`
+                : "Token 拒绝: 无";
             const lines = [
                 `授权码: ${codeM ? "有（" + codeM[0].slice(0, 12) + "…）" : "无"}`,
                 `获取时间: ${when}`,
                 `refresh token: ${token ? "有（" + String(token).length + " 字节）" : "无（下次运行会重新换码）"}`,
                 `授权来源: ${GM_getValue("Config.codeManual", false) ? "手动打开" : "脚本打开"}`,
                 errLine,
+                tokErrLine,
                 `脚本版本: ${GM_info.script.version || "?"}`,
             ];
             text = lines.join("\n");
@@ -3526,10 +3583,17 @@ return new Promise((resolveRaw) => {
             if (!isTokenOK) {
                 FuckD.tasks.sign = false;
                 FuckD.tasks.read = false;
-                FuckD.bing.sendMSG = "Token 请求失败，已自动跳过签入和阅读任务，请检查网络连接";
-                await new Promise(resolve => setTimeout(resolve, 500));
-                FuckF.log("🟡", FuckD.bing.sendMSG, true);
-                FuckF.send(FuckD.wh);
+                // renewToken 内部已经写过具体原因（code 无效 / 网络异常），这里只在它没写时才补一条，
+                // 避免「Token 请求失败，请检查网络连接」这种误导性文案盖掉真实错误。
+                const detailed = String(FuckD.bing.sendMSG || "");
+                if (!/授权码无效|重新授权失败|Token 被拒绝/.test(detailed)) {
+                    FuckD.bing.sendMSG = detailed
+                        ? detailed
+                        : "Token 获取失败，已跳过签入/阅读任务。请用菜单「🔍 检查授权状态」查看原因";
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    FuckF.log("🟡", FuckD.bing.sendMSG, true);
+                    FuckF.send(FuckD.wh);
+                }
             }
             // Edge 浏览连签：与主流程解耦的后台计时上报（约 30 分钟），需 dapi Token；不阻塞本次运行 resolve
             if (FuckD.tasks.edge && FuckD.bing.token) {
