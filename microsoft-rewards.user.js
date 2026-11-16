@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.22
+// @version	3.7.25
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -46,6 +46,7 @@
 // @grant	GM_info
 // @grant	GM_log
 // @grant	GM_registerMenuCommand
+// @grant	CAT_registerMenuInput
 // @storageName	FuckScripts_Shared_Auth
 // @tips	此脚本一直为 开源免费 使用，如果你是从某些地方买的话，你就是被骗了
 // @license	GPL-3.0
@@ -184,6 +185,11 @@ Notice:
         description: xxxxxxxxxxxxxxxxxxxx
 ==/UserConfig== */
 
+// ⚠️ 2026-11-16 实测：本分支在 login.live.com 上【不会执行】。
+// 用 sctl 打开 oauth20_authorize.srf 后检查页面上下文，GM_setValue / GM_cookie / GM_log 全部 undefined，
+// 说明内容脚本未被注入（该站点 CSP 极严，与 rewards.bing.com 同类问题）。
+// 历史上每次成功授权都走的是「📋 粘贴授权码」手动路径，自动捕获从未生效。
+// 保留本分支：若将来 ScriptCat 或站点放宽注入限制，可自动恢复；同时它不影响手动路径。
 if (typeof window !== 'undefined' && window.location && window.location.hostname === "login.live.com") {
     (function() {
         // 写 cookie 只是给「跨上下文读取」留的后备通道：
@@ -226,9 +232,27 @@ if (typeof window !== 'undefined' && window.location && window.location.hostname
             } catch (e) { return false; }
         };
 
+        // 关闭当前标签页。
+        // 注意：window.close() 只对「由脚本 window.open 打开」或「有 opener 的标签」有效；
+        // 对 GM_openInTab 打开的标签，多数浏览器会静默拒绝（这正是之前关不掉的原因）。
+        // 因此按「能关就关，关不掉就明确告诉用户」处理，并把结果写进存储便于排查。
         const closeIfOurs = function(ours) {
             if (!ours) return;
-            setTimeout(function() { try { window.close(); } catch (e) {} }, 400);
+            setTimeout(function() {
+                let how = "";
+                try { window.close(); how = "window.close"; } catch (e) { how = "window.close 抛错:" + e.message; }
+                // 400ms 后还活着，说明 close 被忽略：再试两种兜底
+                setTimeout(function() {
+                    try {
+                        if (typeof GM_closeInTab === "function") { GM_closeInTab(); how += " → GM_closeInTab"; }
+                    } catch (e) {}
+                    try { window.open("", "_self"); window.close(); } catch (e) {}
+                    try {
+                        GM_setValue("Config.authCloseResult", { at: Date.now(), how, url: location.href.slice(0, 80) });
+                    } catch (e) {}
+                    try { GM_log("[auth] 尝试关闭授权页（" + how + "）"); } catch (e) {}
+                }, 500);
+            }, 400);
         };
 
         const checkAndCapture = function() {
@@ -819,11 +843,30 @@ FuckF.renewToken = async () => {
         FuckF.log("🟡", `${msg}，正在打开授权页面...`);
 
         let authWindow = null;
+        let authTab = null;
         if (typeof window !== 'undefined' && window.open) {
             authWindow = window.open(authUrl, '_blank', 'width=600,height=600');
         } else {
-            GM_openInTab(authUrl, { active: true, insert: true, setParent: true });
+            // 必须留住 handle：window.close() 只能关 window.open 打开的子窗口，
+            // 对 GM_openInTab 打开的标签页无效（浏览器会静默拒绝），
+            // 只能由打开方通过 handle.close() 关闭。
+            try {
+                authTab = GM_openInTab(authUrl, { active: true, insert: true, setParent: true });
+            } catch (e) {
+                GM_openInTab(authUrl, { active: true, insert: true });
+            }
         }
+
+        // 关闭授权标签页：优先用 handle，其次 window.close（只对 window.open 有效）
+        const closeAuthTab = () => {
+            try {
+                if (authTab && typeof authTab.close === "function") { authTab.close(); return true; }
+            } catch (e) {}
+            try {
+                if (authWindow && !authWindow.closed) { authWindow.close(); return true; }
+            } catch (e) {}
+            return false;
+        };
 
         await new Promise(resolve => setTimeout(resolve, 2000));
         FuckF.log("🟡", `请在打开的页面中完成登录授权，等待授权码...`);
@@ -832,6 +875,7 @@ FuckF.renewToken = async () => {
         let codeMatch = await pollForAuthCode(120, excludeCode);
         if (codeMatch) {
             FuckF.log("🟢", "授权码获取成功");
+            if (closeAuthTab()) FuckF.log("🟢", "已关闭授权页面");
             return codeMatch;
         }
 
@@ -842,8 +886,11 @@ FuckF.renewToken = async () => {
         codeMatch = await pollForAuthCode(120, excludeCode);
         if (codeMatch) {
             FuckF.log("🟢", "授权码手动获取成功");
+            if (closeAuthTab()) FuckF.log("🟢", "已关闭授权页面");
             return codeMatch;
         }
+        // 超时也关掉：页面停在登录框对用户没有价值，留着只是多一个标签
+        if (closeAuthTab()) FuckF.log("🟡", "授权超时，已关闭授权页面");
 
         FuckD.tasks.sign = false;
         FuckD.tasks.read = false;
@@ -3133,10 +3180,19 @@ if (typeof GM_registerMenuCommand === 'function') {
         const u = "https://login.live.com/oauth20_authorize.srf?client_id=0000000040170455&response_type=code&scope=service::prod.rewardsplatform.microsoft.com::MBI_SSL&redirect_uri=https://login.live.com/oauth20_desktop.srf";
         try {
             GM_setValue("Config.authFlowAt", Date.now());
-            GM_openInTab(u, { active: true, insert: true });
+            // 记下「等待中的授权」：后台脚本会轮询 Config.code，
+            // 一旦登录页捕获到 code，就由后台把标签关掉（菜单所在前台拿不到 GM_openInTab 的 handle）
+            GM_setValue("Config.authPending", { at: Date.now(), url: u });
+            let tab = null;
+            try { tab = GM_openInTab(u, { active: true, insert: true, setParent: true }); }
+            catch (e) { tab = GM_openInTab(u, { active: true, insert: true }); }
+            // 前台如果能拿到 handle 就自己兜底关（部分环境 GM_openInTab 不返回 handle）
+            if (tab && typeof tab.close === "function") {
+                GM_setValue("Config.authPending", { at: Date.now(), url: u, hasHandle: true });
+            }
             if (GM_getValue("Notice.bro", true)) {
                 GM_notification({
-                    text: "登录后授权码会自动写入（无需复制）。若长时间未登录，页面会停在登录框。",
+                    text: "登录完成后，浏览器地址栏会变成 oauth20_desktop.srf?code=M.xxx…\n请复制整条地址，用脚本菜单「📋 粘贴授权码」粘贴（自动捕获在 login.live.com 上被 CSP 拦截，不可用）。",
                     title: GM_info.script.name,
                     onclick: () => {}
                 });
@@ -3190,6 +3246,49 @@ if (typeof GM_registerMenuCommand === 'function') {
         try { GM_notification({ text: info, title: GM_info.script.name, onclick: () => {} }); } catch (e) {}
     });
 
+    // 统一的授权码写入逻辑，两个入口（原生输入框 / prompt）共用
+    const applyPastedCode = (raw) => {
+        const text = String(raw || "").trim();
+        if (!text) return "empty";
+        const m = text.match(/M\.[^&\s]+/);
+        if (!m) return "invalid";
+        // 允许粘贴完整 URL，也允许只粘贴 M.xxx 这一段
+        const full = /oauth20_desktop\.srf/i.test(text)
+            ? text
+            : `https://login.live.com/oauth20_desktop.srf?code=${m[0]}`;
+        GM_setValue("Config.code", full);
+        GM_setValue("Config.token", false);
+        GM_setValue("Config.codeTime", Date.now());
+        GM_setValue("Config.codeManual", true);
+        GM_setValue("Config.lastAuthPrompt", 0);   // 清掉冷却，下次运行立刻换 token
+        return "ok";
+    };
+
+    // 首选入口：ScriptCat 原生输入框。它不依赖页面 prompt（页面 CSP 可能拦 prompt），
+    // 在后台脚本里也能弹，是当前环境下最可靠的粘贴方式。
+    if (typeof CAT_registerMenuInput === "function") {
+        try {
+            CAT_registerMenuInput("📋 粘贴授权码（输入框）", (value) => {
+                const r = applyPastedCode(value);
+                let msg;
+                if (r === "ok") {
+                    msg = "授权码已保存，下一轮运行会立刻换取 token";
+                    try { GM_log("🟢 授权码已手动更新（输入框）"); } catch (e) {}
+                } else if (r === "invalid") {
+                    msg = "未识别到授权码（应以 M. 开头），请重试";
+                } else {
+                    msg = "输入为空";
+                }
+                try { GM_notification({ text: msg, title: GM_info.script.name, onclick: () => {} }); } catch (e) {}
+            }, {
+                inputType: "text",
+                title: "粘贴授权码",
+                inputLabel: "授权码链接或 M. 开头的码",
+                inputPlaceholder: "https://login.live.com/oauth20_desktop.srf?code=M...",
+            });
+        } catch (e) {}
+    }
+
     GM_registerMenuCommand("📋 粘贴授权码", () => {
         let text = null;
         try { text = prompt("请粘贴授权码链接（完整 URL）或授权码本身："); } catch (e) { text = null; }
@@ -3201,18 +3300,11 @@ if (typeof GM_registerMenuCommand === 'function') {
             });
             return;
         }
-        const m = String(text).match(/M\.[^&\s]+/);
-        if (!m) {
+        const r = applyPastedCode(text);
+        if (r === "invalid") {
             GM_notification({ text: "未识别到授权码（应以 M. 开头），请重试", title: GM_info.script.name, onclick: () => {} });
             return;
         }
-        // 允许粘贴完整 URL，也允许只粘贴 M.xxx 这一段
-        const full = /oauth20_desktop\.srf/i.test(text)
-            ? text.trim()
-            : `https://login.live.com/oauth20_desktop.srf?code=${m[0]}`;
-        GM_setValue("Config.code", full);
-        GM_setValue("Config.token", false);
-        GM_setValue("Config.codeTime", Date.now());
         GM_notification({
             text: "授权码已更新，脚本将在下一次运行（最多 20 分钟）时换取新 token",
             title: GM_info.script.name,

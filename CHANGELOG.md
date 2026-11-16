@@ -1,5 +1,17 @@
 # 变更记录
 
+## 3.7.25
+
+实测确认：**自动捕获授权码在 login.live.com 上从未生效**。
+
+- 用 sctl 打开 `oauth20_authorize.srf` 后检查页面上下文，`GM_setValue` / `GM_cookie` / `GM_log` 全部 `undefined`，
+  说明内容脚本未被注入（该站点 CSP 极严，与 `rewards.bing.com` 同类问题）。历史上每次成功授权都走「手动粘贴」路径。
+- 关闭标签页机制本身可用（实测 `window.close()` 触发 `target_closed`），只是捕获分支不执行，所以永远走不到关闭逻辑
+- `GM_openInTab` 的 handle 之前被丢弃，后台无法关闭；现已保留 handle 并在捕获/超时后调用 `close()`
+- 新增 `CAT_registerMenuInput` 原生输入框入口「📋 粘贴授权码（输入框）」，不依赖页面 `prompt`（CSP 可能拦），
+  后台脚本里也能弹，是当前环境最可靠的粘贴方式；补充 `@grant CAT_registerMenuInput`
+- 「打开授权页面」文案改为明确提示：登录后复制地址栏 URL，用粘贴菜单完成授权
+
 ## 3.7.22
 
 修复授权流程的自毁行为（这是「日常任务不完成」的直接原因）：

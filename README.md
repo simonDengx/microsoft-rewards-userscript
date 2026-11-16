@@ -195,12 +195,20 @@ Microsoft Rewards（微软积分商城）自动任务脚本的**维护版**，�
                                    → 记录 Config.codeTime / codeManual（便于排查）
                                    → 尝试写 cookie microsoft_rewards_auth_code（仅作后备）
                                    → history.replaceState 清理地址栏（code 不留在历史里）
-                                   → 若本页是脚本打开的，400ms 后自动关闭
+                                   → 若本页是脚本打开的，调用 handle.close() 关闭标签
 
 检测 URL 中的 ?error= → 记录 Config.lastAuthError
                      → 弹通知说明失败原因（access_denied / invalid_request 等）
                      → 同样清理地址栏；脚本打开的页面自动关闭
 ```
+
+
+
+> **⚠️ 实测限制（2026-11）：自动捕获在本机不生效。**
+> 用 sctl 打开 `oauth20_authorize.srf` 后检查页面上下文，`GM_setValue` / `GM_cookie` / `GM_log` 全部为 `undefined`，
+> 说明内容脚本未被注入 —— `login.live.com` 的 CSP 极严，与 `rewards.bing.com` 同类问题。
+> 历史上每次成功授权都走「手动粘贴」路径。因此**请以「📋 粘贴授权码（输入框）」为主要方式**：
+> 登录完成后复制地址栏的 `oauth20_desktop.srf?code=...` 整条 URL，粘贴进该菜单即可。
 
 后台脚本侧用 `GM_addValueChangeListener` 实时监听 `Config.code` 变化，所以**捕获是即时的**，不用等下一次轮询。同一个对象也做了「旧码过滤」，避免读到失效的历史 code。
 
