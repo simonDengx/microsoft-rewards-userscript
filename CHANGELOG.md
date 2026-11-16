@@ -1,5 +1,77 @@
 # 变更记录
 
+## 3.7.37
+
+**修复：设置面板保存的值永远不被采用 —— UserConfig 只写值，不更新时间戳。**
+
+3.7.35 用 `codeTime > tokenTime` 判断「用户最近粘过」，实测发现这个条件恒为假。
+
+3.7.36 加了存储键诊断（`GM_listValues`，每版首次运行打一次），实测输出：
+
+```
+[storage] Config.code = 732B 凭证=M.C529_BL2.2.U.M…
+[storage] Config.codeTime = 13B 1794795008921   ← 10:10:08，用户 13:40 保存后没变
+[storage] Config.tokenTime = 13B 1794798154849  ← 11:02:34
+```
+
+结论：**用户保存是成功的**（`Config.code` 确实有 732B 新值），但 ScriptCat 的
+UserConfig 持久化只写值、**不更新 `Config.codeTime`**。所以基于时间戳的判断永远失效。
+
+修复：改用**值指纹**。记住上次实际用过的凭证（`Config.usedCode`），
+只要 `Config.code` 里的值和它不同，就认定是新粘贴，优先采用：
+
+- `.2.U.` → 清掉旧 token，走换码流程
+- `.0.U.` → 直接覆盖 `Config.token`
+- 使用后（无论成功或被微软拒绝）都写入 `usedCode`，避免拿同一条一次性码反复重试
+
+### 实测
+
+```
+🟡 检测到新粘贴的凭证（code，M.C529_BL2.2…），优先采用
+🔴 Token 被拒绝：invalid_grant · code parameter is not valid
+```
+
+机制生效了。该码被拒是因为 13:40 粘贴、13:44 才用，已超过一次性码的有效期。
+
+随后通过浏览器重新授权，拿到长期 refresh token：
+
+```
+prompt=select_account → 点帐户 → ?code=M.C529_BAY.2.U.MsaArtifacts…（672B）
+code → authorization_code → 200，access 1292B
+refresh（.0.U.，373B）→ REFRESH_TOKEN → 200，access 1312B（可重复使用）
+access → dapi/me → 200，balance = 15269
+```
+
+注入后运行日志：`code=无 · token=(373B，13:48:38写入)`，无 Token 被拒绝。
+
+## 3.7.36
+
+新增存储键诊断与 `GM_listValues` 授权声明（每版首次运行输出一次，
+用 `Config.storageDumpedVersion` 去重，不刷日志）。用于定位「保存了但脚本读不到」这类问题。
+
+## 3.7.35
+
+用户主动粘贴的凭证优先于旧 token。此前只在「没有 refresh token」时才检查 `Config.code`，
+用户粘了新值时脚本继续用旧 `Config.token`，日志一字不提，表现为「粘了没反应」。
+（本版的判据 `codeTime > tokenTime` 有误，3.7.37 已改为值指纹。）
+
+## 3.7.34
+
+`CAT_registerMenuInput` 从 `GM_registerMenuCommand` 的 `if` 里拆出来。
+两者被套在同一条件里，后台脚本若缺前者，输入框菜单会一起消失。
+新增启动自检：`[menu] GM_registerMenuCommand=有 · CAT_registerMenuInput=有 · 输入框已注册=true`。
+
+## 3.7.33
+
+宣告「今日全部完成」前用站方仪表盘核对真实进度。
+`isAllDone` 只看本地 `Config.tasks` 的日期，本地被写成今天但站方没记账时会误报完成并整天休眠——
+这正是「默默执行但日常任务没完成」的成因。实测输出：`完成度核对：PC 搜索站方进度 60/60`。
+
+## 3.7.32
+
+启动时输出授权状态摘要（凭证类型 / 长度 / 写入时间 / 上次拒绝原因），指纹化输出只露前 12 字符。
+没有这行时「粘了没反应」只能靠猜。
+
 ## 3.7.31
 
 **两个真实根因：授权 URL 缺 `prompt=select_account` + 凭证类型判别反了。**
