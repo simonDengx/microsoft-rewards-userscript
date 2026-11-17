@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.37
+// @version	3.7.40
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -722,18 +722,22 @@ FuckF.renewToken = async () => {
         const usedVal = String(GM_getValue("Config.usedCode", "") || "");
         if (codeVal && codeVal !== usedVal) {
             const k = /M\.[A-Z0-9_]+\.2\.U\./i.test(codeVal) ? "code" : (/M\.[A-Z0-9_]+\.0\.U\./i.test(codeVal) ? "refresh" : "unknown");
-            FuckF.log("🟡", `检测到新粘贴的凭证（${k}，${codeVal.slice(0, 14)}…），优先采用`);
             if (k === "refresh") {
+                FuckF.log("🟡", `检测到新粘贴的 refresh token（${codeVal.slice(0, 14)}…），覆盖旧 token`);
                 GM_setValue("Config.token", codeVal);
                 GM_setValue("Config.tokenTime", Date.now());
                 refreshToken = codeVal;
-            } else {
-                // 授权码（含未识别格式）：清掉旧 token，走换码流程
-                GM_setValue("Config.token", false);
-                GM_setValue("Config.tokenTime", 0);
-                refreshToken = false;
+                GM_setValue("Config.usedCode", codeVal);
+            } else if (k === "code") {
+                // ⚠️ 不能一看到新授权码就把有效 refresh token 清掉：
+                //    设置栏里很可能残留一条早已过期的码（本机实测就有），
+                //    清掉 token 会让本来能用的账号直接掉线。
+                //    这里只标记「本轮优先试这条码」，token 留着当兜底；
+                //    码换 token 失败时会自动回落到 refresh token。
+                FuckF.log("🟡", `检测到新粘贴的授权码（${codeVal.slice(0, 14)}…），本轮优先用它换取 token（旧 token 保留作兜底）`);
+                GM_setValue("Config.preferCode", codeVal);
+                GM_setValue("Config.usedCode", codeVal);
             }
-            GM_setValue("Config.usedCode", codeVal);
         }
     } catch (e) {}
     // 脏数据自愈：3.7.29 把「含 MsaArtifacts」当成 refresh token 特征，
@@ -975,6 +979,24 @@ FuckF.renewToken = async () => {
         FuckD.tasks.read = false;
         return false;
     };
+    // 用户刚粘了一条新授权码：优先试它。成功则直接采用新 token，
+    // 失败（多半是超过一次性码的有效期）就静默回落到下面已有的 refresh token，
+    // 不让「粘了一条过期码」把本来能用的账号搞掉线。
+    try {
+        const preferCode = String(GM_getValue("Config.preferCode", "") || "");
+        if (preferCode) {
+            GM_setValue("Config.preferCode", "");
+            const url = `https://login.live.com/oauth20_token.srf?client_id=0000000040170455&code=${encodeURIComponent(preferCode)}&redirect_uri=https://login.live.com/oauth20_desktop.srf&grant_type=authorization_code`;
+            const ok = await FuckF.getToken(url);
+            if (ok) {
+                GM_setValue("Config.lastAuthPrompt", 0);
+                FuckF.log("🟢", "新粘贴的授权码已成功换取 token");
+                return true;
+            }
+            const err = GM_getValue("Config.lastTokenError", null);
+            FuckF.log("🟡", `新粘贴的授权码未被接受（${err ? err.error : "未知"}），回落到已有 refresh token`);
+        }
+    } catch (e) {}
     if (!refreshToken) {
         let code = GM_getValue("Config.code", "");
         // 运行时纠错：用户可能通过「脚本设置 → Config → 授权码链接」直接粘贴，
@@ -1129,6 +1151,11 @@ FuckF.getRewardsInfo = async (maxRetries = 3) => {
 
 FuckF.taskSign = async () => {
     if (!FuckD.tasks.sign || FuckD.sign.date == FuckD.bing.dateNowNum || FuckD.sign.times > 2 || FuckD.sign.end > 0) {
+        // 这几种跳过以前完全静默，外部无法判断是「今天做过了」还是「被误记为完成」。
+        // 只在真正需要跑却被日期挡下时记一行，避免每轮刷屏。
+        if (FuckD.tasks.sign && FuckD.sign.date == FuckD.bing.dateNowNum && FuckD.sign.end == 0) {
+            FuckF.log("🗓", `签入：本地已记为今日完成，跳过（如需重做请把设置里 Config.tasks 的 sign 清 0）`);
+        }
         FuckD.sign.end++
         return true
     }
@@ -1241,6 +1268,11 @@ FuckF.getPromotions = async () => {
 
 FuckF.taskRead = async () => {
     if (!FuckD.tasks.read || FuckD.read.times > 2 || FuckD.read.end > 0) {
+        // 阅读的跳过条件里没有日期，只看 times>2 —— 连续 3 次拿不到进度就整天不再试，
+        // 且以前完全静默，看起来就像「阅读任务凭空消失」。
+        if (FuckD.tasks.read && FuckD.read.times > 2 && FuckD.read.end == 0) {
+            FuckF.log("🗓", `阅读：连续 ${FuckD.read.times} 次获取进度失败，本轮放弃（下轮会重置计数重试）`);
+        }
         FuckD.read.end++;
         return true;
     }
@@ -2430,6 +2462,51 @@ FuckF.taskHarvestInner = async () => {
             GM_setValue("Config.unadaptedNotified", today);
             const brief = unadapted.slice(0, 6).map(x => `${x.name}(${(x.attributes || {}).offerid})`).join("、");
             FuckF.log("🧩", `检测到 ${unadapted.length} 个未适配任务（暂不处理，供后续适配）：${brief}${unadapted.length > 6 ? "…" : ""}`);
+        }
+    } catch (e) {}
+
+    // 站方全景对照：每天输出一次「站方还有哪些项没完成，各自为什么不做」。
+    // 没有这行时，用户只能看到「今日任务已全部完成」，无法判断是真做完了还是被规则跳过。
+    try {
+        if (GM_getValue("Config.panoramaDate", 0) != today) {
+            GM_setValue("Config.panoramaDate", today);
+            const why = (p) => {
+                const a = (p && p.attributes) || {};
+                const n = String(p.name || ""), oid = String(a.offerid || "");
+                if (skipRe.test(n) || skipRe.test(oid)) {
+                    if (/TrialUser/i.test(n + oid)) return "试用资格(不碰)";
+                    if (/AppInstall|AppMigration|Fosbury|HVA/i.test(n + oid)) return "需真实App";
+                    if (/DailyCheckIn_Parent|Sapphire_DailyCheckIn/i.test(n + oid)) return "打卡(仅App)";
+                    if (/EdgeUsage/i.test(n + oid)) return "Edge用量(已下线)";
+                    return "规则跳过";
+                }
+                if (!catOn(FuckF.harvestCategory(n))) return "分类开关关闭";
+                const d = offerDate(oid);
+                if (d && d > Number(FuckD.bing.dateNowNum)) return "未来日期";
+                if (st.done.includes(oid)) return "本轮已完成";
+                if (st.failed.includes(oid)) return "本轮失败";
+                return "待做";
+            };
+            const pending = promos.filter((p) => {
+                const a = (p && p.attributes) || {};
+                if (!a.offerid) return false;
+                if (String(a.complete || "").toLowerCase() === "true") return false;
+                const max = Number(a.max), prog = Number(a.progress);
+                if (!Number.isFinite(max) || max <= 0) return false;
+                if (Number.isFinite(prog) && prog >= max) return false;
+                return true;
+            });
+            const doneCnt = promos.filter((p) => String(((p && p.attributes) || {}).complete || "").toLowerCase() === "true").length;
+            FuckF.log("🧾", `站方全景：活动共 ${promos.length} 项，已完成 ${doneCnt}，未完成 ${pending.length}`);
+            // 只列「真正还能做但没做」的和「因机制做不了」的汇总，避免刷屏
+            const canDo = pending.filter((p) => why(p) === "待做");
+            const byReason = {};
+            pending.forEach((p) => { const k = why(p); byReason[k] = (byReason[k] || 0) + 1; });
+            const summary = Object.entries(byReason).map(([k, v]) => `${k} ${v}`).join(" · ");
+            if (summary) FuckF.log("🧾", `未完成原因分布：${summary}`);
+            if (canDo.length) {
+                FuckF.log("🧾", `仍可完成但本轮未做 ${canDo.length} 项：${canDo.slice(0, 8).map((p) => (p.attributes || {}).offerid).join("、")}${canDo.length > 8 ? "…" : ""}`);
+            }
         }
     } catch (e) {}
 
@@ -3752,6 +3829,16 @@ return new Promise((resolveRaw) => {
                 ];
                 if (err) parts.push(`上次拒绝=${err.error}`);
                 FuckF.log("🔑", `授权状态：${parts.join(" · ")}`);
+            } catch (e) {}
+            // 任务调度摘要：签入/阅读/活动/搜索 各自的开关 + 今日是否已被记为完成。
+            // 这两项在 taskSign/taskRead 里是「日期已是今天就直接 return true」，
+            // 不打任何日志，所以从外部完全看不出它们是被跳过了还是失败了。
+            // 有了这一行，才能区分「机制如此（今天确实做过了）」和「被误记为完成」。
+            try {
+                const today = FuckD.bing.dateNowNum;
+                const fmt = (d) => (!d ? "未做" : (d == today ? "今日已完成" : "上次" + d));
+                const onOff = (b) => (b ? "开" : "关");
+                FuckF.log("🗓", `任务调度：签入[${onOff(FuckD.tasks.sign)} ${fmt(FuckD.sign.date)}] · 阅读[${onOff(FuckD.tasks.read)} ${fmt(FuckD.read.date)}] · 活动[${onOff(FuckD.tasks.promos)} ${fmt(FuckD.promos.date)}] · 搜索[${onOff(FuckD.tasks.search)} ${fmt(FuckD.search.date)}]`);
             } catch (e) {}
             const isTokenOK = await FuckF.renewToken();
             if (!isTokenOK) {
