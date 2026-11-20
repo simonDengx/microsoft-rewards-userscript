@@ -2,13 +2,13 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.40
+// @version	3.7.56
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
 // @original-script	https://github.com/geoisam/FuckScripts
 // @original-license	GPL-3.0
-// @icon	data:image/png;base64,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
+// @icon	https://simondengx.github.io/microsoft-rewards-userscript/icon.png
 // @homepage	https://github.com/simonDengx/microsoft-rewards-userscript
 // @homepageURL	https://github.com/simonDengx/microsoft-rewards-userscript
 // @supportURL	https://github.com/simonDengx/microsoft-rewards-userscript/issues
@@ -1114,16 +1114,40 @@ FuckF.getRewardsInfo = async (maxRetries = 3) => {
                     }
                 }
             }
+            let parseOK = false;
             try {
                 const pts = JSON.parse(cleanHtml.substring(start, end));
-                pcMax = pts.pc?.max ?? 60;
-                pcCur = pts.pc?.progress ?? 0;
-                mobMax = pts.mobile?.max ?? 0;
-                mobCur = pts.mobile?.progress ?? 0;
-                dailyPoint = pts.dailyOffer ?? 0;
-                todayTotal = pts.totalPoints ?? 0;
-            } catch {
-                FuckF.log("🟡", "仪表盘解析异常，将使用保底数值");
+                // ⚠️ 不能给 pc/mobile 加「读不到就当默认值」的兜底。
+                //    之前写的是 `pts.pc?.max ?? 60` / `pts.pc?.progress ?? 0`，
+                //    一旦站点改版导致字段缺失，就会得到「0/60」或读到错位对象里的数字，
+                //    再被下游当成「搜索已满分」直接跳过——用户看到的就是日常搜索从没做过。
+                //    正确做法：字段缺失就判定本次读取失败，让调用方重试或如实报错，
+                //    绝不能把「没读到」伪装成一个看起来合理的额度。
+                const pcObj = pts && pts.pc;
+                const mobObj = pts && pts.mobile;
+                if (pcObj && Number.isFinite(Number(pcObj.max)) && Number(pcObj.max) > 0) {
+                    pcMax = Number(pcObj.max);
+                    pcCur = Number.isFinite(Number(pcObj.progress)) ? Number(pcObj.progress) : 0;
+                    parseOK = true;
+                }
+                if (mobObj && Number.isFinite(Number(mobObj.max))) {
+                    mobMax = Number(mobObj.max);
+                    mobCur = Number.isFinite(Number(mobObj.progress)) ? Number(mobObj.progress) : 0;
+                }
+                dailyPoint = Number(pts.dailyOffer) || 0;
+                todayTotal = Number(pts.totalPoints) || 0;
+            } catch (e) {
+                parseOK = false;
+            }
+            if (!parseOK) {
+                // 解析不到搜索计数器：本次读取视为失败，交给外层重试。
+                // 以前这里会带着「保底数值」继续跑，等于用一个编出来的进度决定今天要不要做搜索。
+                FuckF.log("🟡", `仪表盘计数器解析失败（pointsCounters 结构可能已变），本次不采信该结果`);
+                if (attempt < maxRetries) {
+                    await new Promise(resolve => setTimeout(resolve, 3210));
+                    continue;
+                }
+                return false;
             }
             FuckD.bing.todayTotalPoints = todayTotal;
             // 持久化站方当日总分：汇总日志在本轮更早的位置执行，只能读上一轮写入的值
@@ -2514,9 +2538,40 @@ FuckF.taskHarvestInner = async () => {
         if (!st.notified) {
             st.notified = true;
             save();
-            const msg = st.point > 0
-                ? `🌐今日任务收割完成：共 +${st.point} 积分（${st.done.length} 个任务）`
-                : "🌐今日任务收割完成：无可做任务";
+            // ⚠️ targets 已经排除了 st.failed 的项，所以「全部上报失败」也会走到这里。
+            //    必须把失败数一起报出来，否则「收割完成」会被误读成「日常任务都做完了」。
+            const failedCnt = Array.isArray(st.failed) ? st.failed.length : 0;
+            let msg;
+            if (st.point > 0) {
+                msg = `🌐今日任务收割完成：共 +${st.point} 积分（${st.done.length} 个任务）`;
+            } else {
+                msg = "🌐今日任务收割完成：无可做任务";
+            }
+            if (failedCnt > 0) msg += `\n⚠️其中 ${failedCnt} 个上报未成功（已记入今日失败，不再重试）`;
+            // 关键诊断：说清「无可做任务」到底是怎么来的。
+            // 没有这行时，「已清空」可能是真的做完了，也可能是被过滤规则全排除了，
+            // 两种情况在日志里长得一模一样。
+            try {
+                const why = {};
+                promos.forEach((p) => {
+                    const a = (p && p.attributes) || {};
+                    if (!a.offerid) { why["无offerid"] = (why["无offerid"] || 0) + 1; return; }
+                    if (String(a.complete || "").toLowerCase() === "true") return;   // 真完成，不计
+                    const mx = Number(a.max), pg = Number(a.progress);
+                    let r;
+                    if (!Number.isFinite(mx) || mx <= 0) r = "max无效";
+                    else if (Number.isFinite(pg) && pg >= mx) r = "progress已满";
+                    else if (skipRe.test(p.name || "") || skipRe.test(a.offerid || "")) r = "不可上报规则";
+                    else if (offerDate(a.offerid) > Number(FuckD.bing.dateNowNum)) r = "未来日期";
+                    else if (!catOn(FuckF.harvestCategory(p.name))) r = "分类关闭";
+                    else if (st.done.includes(a.offerid)) r = "本轮已完成";
+                    else if (st.failed.includes(a.offerid)) r = "本轮失败";
+                    else r = "其他";
+                    why[r] = (why[r] || 0) + 1;
+                });
+                const dist = Object.entries(why).map(([k, v]) => `${k} ${v}`).join(" · ");
+                if (dist) msg += `\n未计入的原因：${dist}`;
+            } catch (e) {}
             FuckF.log("🔵", msg, true);
             FuckF.send(FuckD.wh);
         }
@@ -2539,6 +2594,25 @@ FuckF.taskHarvestInner = async () => {
         }
     }
 
+    // 站方进度回读：activity.p>0 只代表「这次上报服务端给了分」，
+    // 不代表站方那个活动的进度条推进了。实测 DailySet_Child1/2/3 上报返回 p=10、
+    // 台账也记了 +10，但站方 progress 依然是 0/10，界面显示未完成。
+    // 唯一可靠的判据是回读 promotion 的 progress。
+    const verifyPromoProgress = async (offerid) => {
+        try {
+            const pr = await FuckF.getMobileProfile(region);
+            if (!pr || !Array.isArray(pr.promotions)) return null;
+            const hit = pr.promotions.find((x) => String(((x.attributes || {}).offerid) || "") === String(offerid));
+            if (!hit) return null;
+            const at = hit.attributes || {};
+            return {
+                complete: String(at.complete || "").toLowerCase() === "true",
+                progress: Number(at.progress),
+                max: Number(at.max),
+            };
+        } catch (e) { return null; }
+    };
+
     const balBefore = await FuckF.readBalance();
 
     let gained = 0, ok = 0;
@@ -2556,11 +2630,21 @@ FuckF.taskHarvestInner = async () => {
             }
             if (code === 0 && !dup) {
                 if (point > 0) {
-                    ok++; gained += point;
-                    st.point = (st.point || 0) + point;
-                    st.done.push(a.offerid);
-                    FuckF.ledgerAdd(p.name, point);
-                    FuckF.log("✨", `${p.name} +${point} 分`);
+                    // 上报给了分，但要再确认站方进度真的推进了，否则就是「假完成」
+                    let verified = null;
+                    try { verified = await verifyPromoProgress(a.offerid); } catch (e) {}
+                    if (verified && verified.max > 0 && verified.progress <= 0 && !verified.complete) {
+                        // 站方进度没动：这次分很可能来自别的统计口径，不能算这个任务完成
+                        st.failed.push(a.offerid);
+                        FuckF.log("🟡", `${p.name} 上报返回 +${point} 但站方进度仍为 ${verified.progress}/${verified.max}，不计入完成`);
+                    } else {
+                        ok++; gained += point;
+                        st.point = (st.point || 0) + point;
+                        st.done.push(a.offerid);
+                        FuckF.ledgerAdd(p.name, point);
+                        const v = verified ? `（站方 ${verified.progress}/${verified.max}）` : "";
+                        FuckF.log("✨", `${p.name} +${point} 分${v}`);
+                    }
                 } else {
                     // p=0：服务端接受但未记账（多为未到生效日期）。当天不再重复尝试。
                     st.failed.push(a.offerid);
@@ -3159,12 +3243,16 @@ FuckF.taskSearch = async () => {
         }
         const searchInfo = dashboard.userStatus?.counters || {};
         FuckD.search.pc.progress = searchInfo.pcSearch?.[0]?.pointProgress || 0;
-        let pcMax = searchInfo.pcSearch?.[0]?.pointProgressMax || 0;
-        if (pcMax === 0) pcMax = 60;
+        // 不再用 60 兜底：getRewardsInfo 已保证 pcMax 是真实读到的值，
+        // 这里若为 0 说明上游判定失败，直接放弃本轮而不是编一个额度去比进度。
+        const pcMax = Number(searchInfo.pcSearch?.[0]?.pointProgressMax || 0);
+        if (!(pcMax > 0)) {
+            FuckF.log("🟡", "搜索额度读取为 0，本轮不判定完成（避免用假额度误判已满）");
+            return false;
+        }
         FuckD.search.pc.max = pcMax;
         FuckD.search.m.progress = searchInfo.mobileSearch?.[0]?.pointProgress || 0;
-        let mMax = searchInfo.mobileSearch?.[0]?.pointProgressMax || 0;
-        if (mMax === 0) mMax = 0;
+        const mMax = Number(searchInfo.mobileSearch?.[0]?.pointProgressMax || 0);
         FuckD.search.m.max = mMax;
         const currentTotalSearch = FuckD.search.pc.progress + FuckD.search.m.progress;
         const lastTotalSearch = GM_getValue("Config.lastSearchProgress", -1);
@@ -3222,13 +3310,38 @@ FuckF.taskSearch = async () => {
         }
     }
     if (FuckD.search.index >= FuckD.search.limit) {
-        FuckD.search.end++;
-        const pcReport = FuckD.search.pc.max > 0 ? `\n💻电脑端搜索：${FuckD.search.pc.progress}/${FuckD.search.pc.max}` : "";
-        const mReport = FuckD.search.m.max > 0 ? `\n📱手机端搜索：${FuckD.search.m.progress}/${FuckD.search.m.max}` : "";
-        FuckD.bing.sendMSG = `本轮运行正常，共搜索 ${FuckD.search.index} 次！${pcReport}${mReport}`;
-        FuckF.log("🔍", FuckD.bing.sendMSG);
-        FuckF.send(FuckD.wh);
-        return true;
+        // ⚠️ 这里以前是无条件 end++ 收工，导致每轮只搜 limit(4~7) 次就结束，
+        //    而 PC 搜索满分 60 分通常要 20~30 次搜索才够——于是永远攒不满，
+        //    下一轮又从「本地记为已完成」开始，日常搜索长期做不完。
+        //    正确做法：只有进度真满才收工；没满就继续，直到达到硬上限。
+        const pcDone = FuckD.search.pc.progress >= FuckD.search.pc.max;
+        const mDone = FuckD.search.m.progress >= FuckD.search.m.max;
+        if (pcDone && mDone) {
+            FuckD.search.end++;
+            const pcReport = FuckD.search.pc.max > 0 ? `\n💻电脑端搜索：${FuckD.search.pc.progress}/${FuckD.search.pc.max}` : "";
+            const mReport = FuckD.search.m.max > 0 ? `\n📱手机端搜索：${FuckD.search.m.progress}/${FuckD.search.m.max}` : "";
+            FuckD.bing.sendMSG = `🔍搜索任务已完成！共搜索 ${FuckD.search.index} 次${pcReport}${mReport}`;
+            FuckF.log("🔵", FuckD.bing.sendMSG);
+            FuckF.send(FuckD.wh);
+            return true;
+        }
+        // 未满：放宽上限继续搜，但有硬顶防止无限循环。
+        // 30 次 × 约 30 秒间隔 ≈ 15 分钟，在 service worker 生命周期内可完成；
+        // 若间隔设得很大（用户把 span 调到 60+），实际会受时间限制，届时如实报告差额。
+        const HARD_CAP = 30;
+        if (FuckD.search.index < HARD_CAP) {
+            FuckF.log("🔍", `搜索未满（PC ${FuckD.search.pc.progress}/${FuckD.search.pc.max}），继续搜索（${FuckD.search.index}/${HARD_CAP}）`);
+            FuckD.search.limit = HARD_CAP;
+        } else {
+            // 到达硬顶仍未满：如实报告差额，不谎称完成
+            FuckD.search.end++;
+            const pcReport = FuckD.search.pc.max > 0 ? `\n💻电脑端搜索：${FuckD.search.pc.progress}/${FuckD.search.pc.max}` : "";
+            const mReport = FuckD.search.m.max > 0 ? `\n📱手机端搜索：${FuckD.search.m.progress}/${FuckD.search.m.max}` : "";
+            FuckD.bing.sendMSG = `⚠️搜索已达单轮上限 ${HARD_CAP} 次，仍未满分${pcReport}${mReport}`;
+            FuckF.log("🟡", FuckD.bing.sendMSG, true);
+            FuckF.send(FuckD.wh);
+            return true;
+        }
     }
     FuckD.search.date = 0;
     let query, params, pcorm, headers, regionMKT = "";
@@ -3686,7 +3799,16 @@ return new Promise((resolveRaw) => {
             if (FuckD.bing.end === 0) {
                 const checkDone = (taskEnabled, taskDate) => !taskEnabled || taskDate == FuckD.bing.dateNowNum;
                 const isAllDone = checkDone(FuckD.tasks.sign, FuckD.sign.date) && checkDone(FuckD.tasks.read, FuckD.read.date) && checkDone(FuckD.tasks.promos, FuckD.promos.date) && checkDone(FuckD.tasks.search, FuckD.search.date);
-                if (isAllDone) {
+                // ⚠️ 这里以前只看四项日期，不看收割。收割（日常任务）需要多轮才清空，
+                //    但四项一记完成就走到这里打「全部完成」，把剩下的日常任务掩盖掉。
+                //    现在同外层一样，要求站方没有可做的日常任务才算完成。
+                const harvestStillNow = Number(FuckD.harvestStillTodo);
+                const harvestBlocking = ["sapphire", "evergreen", "dailyset", "checkin"].some((c) => GM_getValue("Harvest." + c, true))
+                    && (!Number.isFinite(harvestStillNow) || harvestStillNow > 0);
+                if (isAllDone && harvestBlocking) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    FuckF.log("🟡", `本轮结束：四项主任务已完成，但日常任务仍有 ${Number.isFinite(harvestStillNow) ? harvestStillNow + " 项" : "未确认"} 可做，等下一轮继续`);
+                } else if (isAllDone) {
                     const allDoneDate = GM_getValue("Config.allDoneDate", 0);
                     if (allDoneDate != FuckD.bing.dateNowNum) {
                         GM_setValue("Config.allDoneDate", FuckD.bing.dateNowNum);
@@ -3839,6 +3961,14 @@ return new Promise((resolveRaw) => {
                 const fmt = (d) => (!d ? "未做" : (d == today ? "今日已完成" : "上次" + d));
                 const onOff = (b) => (b ? "开" : "关");
                 FuckF.log("🗓", `任务调度：签入[${onOff(FuckD.tasks.sign)} ${fmt(FuckD.sign.date)}] · 阅读[${onOff(FuckD.tasks.read)} ${fmt(FuckD.read.date)}] · 活动[${onOff(FuckD.tasks.promos)} ${fmt(FuckD.promos.date)}] · 搜索[${onOff(FuckD.tasks.search)} ${fmt(FuckD.search.date)}]`);
+                // 日常任务（收割）单独一行：它每轮只推进 maxPerRun 个，需要多轮才清空，
+                // 不单独报的话从外部完全看不出「还剩几个没做」。
+                const hs = GM_getValue(FuckF.HARVEST_KEY, null) || {};
+                const hsToday = hs.date == today;
+                const doneN = hsToday && Array.isArray(hs.done) ? hs.done.length : 0;
+                const failN = hsToday && Array.isArray(hs.failed) ? hs.failed.length : 0;
+                const catOn = ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => GM_getValue("Harvest." + c, true));
+                FuckF.log("🗓", `日常任务：${catOn.length ? catOn.join("/") : "全关"} · 今日已完成 ${doneN} 个 · 失败 ${failN} 个 · ${hsToday && hs.notified ? "本地记为已清空" : "仍有待做"}`);
             } catch (e) {}
             const isTokenOK = await FuckF.renewToken();
             if (!isTokenOK) {
@@ -3856,6 +3986,95 @@ return new Promise((resolveRaw) => {
                     FuckF.send(FuckD.wh);
                 }
             }
+            // 站方真实状态：直接查 dapi promotions，数出「还有几项没完成」。
+            // 这是唯一不依赖本地记账的真相来源——之前「本地已清空但站方还有一堆」就是
+            // 因为只看本地 st.notified，从不回读站方。每轮一次，代价很小。
+            if (FuckD.bing.token) {
+                try {
+                    const region0 = FuckD.bing.status ? "cn" : (FuckD.bing.region || "").toLowerCase();
+                    const prof = await FuckF.getMobileProfile(region0);
+                    if (prof && Array.isArray(prof.promotions)) {
+                        const ps = prof.promotions;
+                        const withId = ps.filter(p => (p.attributes || {}).offerid);
+                        const notDoneAll = withId.filter(p => String((p.attributes || {}).complete || "").toLowerCase() !== "true");
+                        // ⚠️ 必须区分「今天该做但没做」和「明天才生效的任务」。
+                        //    站方会提前一天下发每日任务，以前这里把两种混在一起列出来，
+                        //    日志显示 DailySet_Child1/2/3(0/10) 让人以为今天没做，
+                        //    实际那三项 offerid 内嵌的是明天的日期，今天完成的另有三项。
+                        const offerDateOf = (oid) => {
+                            const m = String(oid || "").match(/(20\d{6})/);
+                            return m ? Number(m[1]) : 0;
+                        };
+                        const todayNum0 = Number(FuckD.bing.dateNowNum);
+                        const isFuture = (p) => {
+                            const d = offerDateOf((p.attributes || {}).offerid);
+                            return d > todayNum0;
+                        };
+                        const notDoneNow = notDoneAll.filter(p => !isFuture(p));
+                        const notDoneFuture = notDoneAll.filter(isFuture);
+                        // 再由「专门模块处理」的项（PC 搜索计数 WW_search_global_NewLevel3、阅读 readarticle）
+                        // 也不算「没做」——实测其 description 就是「Earn up to 60 points per day, 3 points per search」，
+                        // 即 pointsCounters.pc 那个计数器本身，搜索时自然累积，不需要单独上报。
+                        // 之前把它列进「到期未完成」，看起来像漏了 60 分，其实是误解。
+                        const navRe = /readarticle|WW_search_global_NewLevel3|WW_NewLevel3_search/i;
+                        const modHandled = notDoneNow.filter(p => navRe.test(String(p.name || "") + ((p.attributes || {}).offerid || "")));
+                        const notDoneReal = notDoneNow.filter(p => !navRe.test(String(p.name || "") + ((p.attributes || {}).offerid || "")));
+                        FuckF.log("🧾", `站方实况：活动 ${ps.length} 项，有 offerid ${withId.length} 项 · 待处理 ${notDoneReal.length} 项 · 模块自管 ${modHandled.length} 项 · 未来待生效 ${notDoneFuture.length} 项`);
+                        if (notDoneReal.length) {
+                            const brief = notDoneReal.slice(0, 8).map(p => {
+                                const a = p.attributes || {};
+                                const nm = String(p.name || "");
+                                const dm = nm.match(/(20\d{6})/);
+                                const tag = dm ? `@${dm[1].slice(4)}` : "";
+                                return `${nm.replace(/^Gamification_DailySet_[A-Z]+_\d+_/, "DailySet_")}${tag}(${a.progress}/${a.max})`;
+                            }).join("、");
+                            FuckF.log("🧾", `待处理明细：${brief}${notDoneReal.length > 8 ? "…" : ""}`);
+                        }
+                        // 模块自管项单独说明，避免被当成漏做
+                        if (modHandled.length) {
+                            const nm = modHandled.slice(0, 4).map(p => String(p.name || "")).join("、");
+                            FuckF.log("🧾", `模块自管 ${modHandled.length} 项（${nm}）：由搜索/阅读模块自然累积，无需单独上报`);
+                        }
+                        // 未来项单独一行，且明确标注「不影响今天」
+                        if (notDoneFuture.length) {
+                            FuckF.log("🧾", `未来待生效 ${notDoneFuture.length} 项（不影响今日完成判定，明日自动转为当日任务）`);
+                        }
+
+                        // 关键：把「站方还有可做的日常任务」写成全局标志，
+                        // 让外层的完成判定能看到。本地 st.notified 说清空不算数。
+                        try {
+                            const skipReV = /TrialUser|AppInstall|AppMigration|^Fosbury_|^HVA_|^Rewards_EdgeUsage_progress_info$|DailyCheckIn_Parent|Gamification_Sapphire_DailyCheckIn/i;
+                            const todayNumV = Number(FuckD.bing.dateNowNum);
+                            const catsOnV = ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => GM_getValue("Harvest." + c, true));
+                            const stillTodo = ps.filter((p) => {
+                                const a = (p && p.attributes) || {};
+                                if (!a.offerid) return false;
+                                if (String(a.complete || "").toLowerCase() === "true") return false;
+                                const mx = Number(a.max), pg = Number(a.progress);
+                                if (!Number.isFinite(mx) || mx <= 0) return false;
+                                if (Number.isFinite(pg) && pg >= mx) return false;
+                                if (skipReV.test(p.name || "") || skipReV.test(a.offerid || "")) return false;
+                                const dm = String(a.offerid).match(/(20\d{6})/);
+                                if (dm && Number(dm[1]) > todayNumV) return false;
+                                const cat = FuckF.harvestCategory(p.name);
+                                if (cat === "other") return false;
+                                if (!catsOnV.includes(cat)) return false;
+                                return true;
+                            });
+                            FuckD.harvestStillTodo = stillTodo.length;
+                            if (stillTodo.length > 0) {
+                                FuckF.log("🟡", `站方仍有 ${stillTodo.length} 项日常任务可做，本轮不会判定为「全部完成」`);
+                                // 清掉本地 notified，让收割重新放开
+                                try {
+                                    const hsV = GM_getValue(FuckF.HARVEST_KEY, null) || {};
+                                    hsV.notified = false;
+                                    GM_setValue(FuckF.HARVEST_KEY, hsV);
+                                } catch (e) {}
+                            }
+                        } catch (e) {}
+                    }
+                } catch (e) {}
+            }
             // Edge 浏览连签：与主流程解耦的后台计时上报（约 30 分钟），需 dapi Token；不阻塞本次运行 resolve
             if (FuckD.tasks.edge && FuckD.bing.token) {
                 FuckF.taskEdgeBrowsing().catch(e => FuckF.log("🔴", `Edge 浏览连签调度异常！🔛${e.message}`));
@@ -3866,6 +4085,70 @@ return new Promise((resolveRaw) => {
             // 若 fire-and-forget，脚本在任务全部完成后 resolve，service worker 被回收，等待中的收割会被直接掐断。
             if (FuckD.bing.token) {
                 try { await FuckF.taskHarvest(); } catch (e) { FuckF.log("🔴", `任务收割异常！🔛${e.message}`); }
+            }
+            // 收割之后重算站方剩余：前面的 harvestStillTodo 是收割前的快照，
+            // 用它判断「是否全部完成」会把刚做掉的那几个也算进去，导致永远不完成。
+            if (FuckD.bing.token) {
+                try {
+                    const regionR = FuckD.bing.status ? "cn" : (FuckD.bing.region || "").toLowerCase();
+                    const profR = await FuckF.getMobileProfile(regionR);
+                    if (profR && Array.isArray(profR.promotions)) {
+                        const skipReR = /TrialUser|AppInstall|AppMigration|^Fosbury_|^HVA_|^Rewards_EdgeUsage_progress_info$|DailyCheckIn_Parent|Gamification_Sapphire_DailyCheckIn/i;
+                        const todayR = Number(FuckD.bing.dateNowNum);
+                        const catsR = ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => GM_getValue("Harvest." + c, true));
+                        const stillR = profR.promotions.filter((p) => {
+                            const a = (p && p.attributes) || {};
+                            if (!a.offerid) return false;
+                            if (String(a.complete || "").toLowerCase() === "true") return false;
+                            const mx = Number(a.max), pg = Number(a.progress);
+                            if (!Number.isFinite(mx) || mx <= 0) return false;
+                            if (Number.isFinite(pg) && pg >= mx) return false;
+                            if (skipReR.test(p.name || "") || skipReR.test(a.offerid || "")) return false;
+                            const dm = String(a.offerid).match(/(20\d{6})/);
+                            if (dm && Number(dm[1]) > todayR) return false;
+                            const cat = FuckF.harvestCategory(p.name);
+                            if (cat === "other") return false;
+                            if (!catsR.includes(cat)) return false;
+                            return true;
+                        });
+                        FuckD.harvestStillTodo = stillR.length;
+                        if (stillR.length > 0) {
+                            FuckF.log("🟡", `收割后站方仍有 ${stillR.length} 项日常任务可做，下一轮继续（不判定为全部完成）`);
+                        } else {
+                            FuckF.log("🟢", "收割后站方日常任务已清空");
+                        }
+                    }
+                } catch (e) {}
+            }
+            // 连续打卡保护：每天记一次 streakCounter / remainingDays，攒几天就能看出
+            // 「保护额度到底靠什么发放」——页面只有这两个字段，没有门槛说明，
+            // 单看一天的 remainingDays=0 无法区分「没资格」和「额度已用完」。
+            if (GM_getValue("Config.streakLogDate", 0) != FuckD.bing.dateNowNum) {
+                try {
+                    GM_setValue("Config.streakLogDate", FuckD.bing.dateNowNum);
+                    const sh = String(await FuckF.xhr({ url: "https://rewards.bing.com/dashboard" }) || "")
+                        .replace(/\\"/g, '"');
+                    const cM = sh.match(/"streakCounter":(\d+)/);
+                    const pM = sh.match(/"isProtectionEnabled":(true|false)/);
+                    const onM = sh.match(/"isProtectionOn":(true|false)/);
+                    const rdM = sh.match(/"remainingDays":(\d+)/);
+                    if (cM) {
+                        const rec = {
+                            date: Number(FuckD.bing.dateNowNum),
+                            counter: Number(cM[1]),
+                            protectionEnabled: pM ? pM[1] === "true" : null,
+                            protectionOn: onM ? onM[1] === "true" : null,
+                            remainingDays: rdM ? Number(rdM[1]) : null,
+                        };
+                        let hist = GM_getValue("Config.streakHistory", []);
+                        if (!Array.isArray(hist)) hist = [];
+                        hist = hist.filter(x => x && x.date != rec.date).concat(rec).slice(-30);
+                        GM_setValue("Config.streakHistory", hist);
+                        const last = hist.length > 1 ? hist[hist.length - 2] : null;
+                        const delta = last && Number.isFinite(last.counter) ? rec.counter - last.counter : null;
+                        FuckF.log("🔥", `连续打卡 ${rec.counter} 天${delta != null && delta !== 0 ? `（较上次 ${delta > 0 ? "+" + delta : delta}）` : ""} · 保护=${rec.protectionOn === null ? "?" : (rec.protectionOn ? "已开启" : "未开启")} · 剩余保护 ${rec.remainingDays === null ? "?" : rec.remainingDays} 天`);
+                    }
+                } catch (e) {}
             }
             // [PATCH] HPQuiz：bing.com + funapi 独立通道，不依赖 dapi token。
             // 放在这里而不是外层流程，是为了复用上面的随机停留，避免每次 cron 准点开跑。
@@ -3904,12 +4187,16 @@ return new Promise((resolveRaw) => {
                     if (needSearch) {
                         const counters = result.userStatus?.counters || {};
                         const pcPro = counters.pcSearch?.[0]?.pointProgress || 0;
-                        let pcMax = counters.pcSearch?.[0]?.pointProgressMax || 0;
+                        const pcMax = Number(counters.pcSearch?.[0]?.pointProgressMax || 0);
                         const mPro = counters.mobileSearch?.[0]?.pointProgress || 0;
-                        let mMax = counters.mobileSearch?.[0]?.pointProgressMax || 0;
-                        if (pcMax === 0) pcMax = 60;
-                        if (mMax === 0) mMax = 0;
-                        if (pcPro >= pcMax && mPro >= mMax) {
+                        const mMax = Number(counters.mobileSearch?.[0]?.pointProgressMax || 0);
+                        // pcMax 必须 >0 才允许判定「已完成」。
+                        // 以前 `if (pcMax === 0) pcMax = 60` 会在读取失败时伪造额度，
+                        // 于是 pcPro(0) >= pcMax(0) 或读到错位数字时就误判满分、整天不做搜索。
+                        if (!(pcMax > 0)) {
+                            FuckF.log("🟡", "搜索额度未能读取，本轮按未完成处理，直接开始搜索");
+                            setTimeout(() => { FuckF.searchStart() }, 100);
+                        } else if (pcPro >= pcMax && mPro >= mMax) {
                             FuckD.search.end++;
                             if (FuckD.search.date != FuckD.bing.dateNowNum) {
                                 FuckD.search.date = FuckD.bing.dateNowNum;
@@ -3947,31 +4234,93 @@ return new Promise((resolveRaw) => {
     }
     const isKeep = GM_getValue("Config.keep", true);
     const checkDone = (taskEnabled, taskDate) => !taskEnabled || taskDate == FuckD.bing.dateNowNum;
+    // ⚠️ 收割（DailySet / Evergreen / Sapphire，也就是站方「日常任务」那一栏）
+    //    以前【完全不在】完成判定里，这是「日常任务没做完但脚本说全部完成」的直接原因。
+    //    收割是每轮最多做 maxPerRun(默认 2) 个、靠多轮 cron 逐步推进的，
+    //    需要好几轮才能清空；但只要 sign/read/promos/search 四项记了今天，
+    //    isAllDone 就为 true，脚本立刻进入「今日已全部完成」休眠，
+    //    收割再也不会被调用，剩下的日常任务整天都不会做。
+    //
+    //    ⚠️ 而且不能用本地 st.notified 判定：实测出现过「只做了 2 个就 notified=true、
+    //    日志说已清空，但站方日常任务还差一大截」的情况。必须回读站方 promotions 才算数。
+    const harvestCatsOn = () => ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => GM_getValue("Harvest." + c, true));
+    // 同步版只用于「是否需要去核对」的快速判断，真正裁决用下面 async 的站方回读
+    const harvestMaybeDone = () => {
+        if (!harvestCatsOn().length) return true;
+        const hs = GM_getValue(FuckF.HARVEST_KEY, null) || {};
+        return hs.date == FuckD.bing.dateNowNum && hs.notified === true;
+    };
+    const isAllDoneNow = () => checkDone(FuckD.tasks.sign, FuckD.sign.date)
+        && checkDone(FuckD.tasks.read, FuckD.read.date)
+        && checkDone(FuckD.tasks.promos, FuckD.promos.date)
+        && checkDone(FuckD.tasks.search, FuckD.search.date)
+        && harvestMaybeDone();
     // ⚠️ isAllDone 只看【本地记录的任务日期】，不看站方真实进度。
     // 本地日期被写成今天、但站方其实没记账时，会误报「全部完成」并整天休眠——
-    // 这正是「有几天默默执行了，但日常任务没完成」的成因。
-    // 所以在宣告完成前用站方仪表盘核对一次真实进度，对不上就重置本地标记继续做。
-    // 注意：这段在 new Promise 回调里（非 async），只能用 Promise 链，不能 await。
-    const isAllDoneNow = () => checkDone(FuckD.tasks.sign, FuckD.sign.date) && checkDone(FuckD.tasks.read, FuckD.read.date) && checkDone(FuckD.tasks.promos, FuckD.promos.date) && checkDone(FuckD.tasks.search, FuckD.search.date);
+    // 这正是「默默执行了但日常任务没完成」的成因。
+    //
+    // ⚠️ 3.7.33 曾在这里加过一次「站方核对」，但写成了 getRewardsInfo().then(...)，
+    //    而 isAllDone 在上面已经同步算完，异步回调的结果永远来不及影响判断，
+    //    那行「完成度核对：60/60」纯粹是装饰日志，根本没拦住误跳过。
+    //    现在改成 async IIFE：先把核对 await 完，再决定要不要判定完成。
+    (async () => {
     const isAllDone = isAllDoneNow();
     if (isAllDone && FuckD.tasks.search) {
-        FuckF.getRewardsInfo().then((dash) => {
-            const ctr = dash?.userStatus?.counters || {};
-            const pc = ctr.pcSearch?.[0] || {};
-            const pcPro = Number(pc.pointProgress || 0);
-            const pcMax = Number(pc.pointProgressMax || 0);
-            FuckF.log("🔍", `完成度核对：PC 搜索站方进度 ${pcPro}/${pcMax}`);
-            if (pcMax > 0 && pcPro < pcMax) {
-                FuckF.log("🟡", `本地记为已完成，但站方仍差 ${pcMax - pcPro} 分，重置完成标记继续执行`);
+        try {
+            const dash = await FuckF.getRewardsInfo();
+            if (!dash) {
+                // 读不到站方进度就不能认定完成，按未完成处理去做任务，比误判整天休眠安全
+                FuckF.log("🟡", "无法读取站方搜索进度，不采信本地完成标记，本轮继续执行");
                 FuckD.search.date = 0;
                 try { GM_setValue("Config.tasks", FuckD.bing.tasks); } catch (e) {}
+            } else {
+                const ctr = dash.userStatus?.counters || {};
+                const pc = ctr.pcSearch?.[0] || {};
+                const pcPro = Number(pc.pointProgress || 0);
+                const pcMax = Number(pc.pointProgressMax || 0);
+                FuckF.log("🔍", `完成度核对：PC 搜索站方进度 ${pcPro}/${pcMax}`);
+                if (!(pcMax > 0)) {
+                    FuckF.log("🟡", "站方搜索额度读取异常（max=0），不采信本地完成标记，本轮继续执行");
+                    FuckD.search.date = 0;
+                    try { GM_setValue("Config.tasks", FuckD.bing.tasks); } catch (e) {}
+                } else if (pcPro < pcMax) {
+                    FuckF.log("🟡", `本地记为已完成，但站方仍差 ${pcMax - pcPro} 分，重置完成标记继续执行`);
+                    FuckD.search.date = 0;
+                    try { GM_setValue("Config.tasks", FuckD.bing.tasks); } catch (e) {}
+                }
             }
-        }).catch(() => {});
+        } catch (e) {
+            FuckF.log("🟡", `完成度核对异常（${e.message}），按未完成处理`);
+            FuckD.search.date = 0;
+            try { GM_setValue("Config.tasks", FuckD.bing.tasks); } catch (e2) {}
+        }
     }
+    // 站方回读：本地 st.notified 说「已清空」不代表站方真的清空了。
+    // 实测出现过只做 2 个就 notified=true、站方日常任务还差一大堆的情况。
+    //
+    // 注意这段在 tasksStart 之外，此时还【没有】token（renewToken 在 tasksStart 里才跑），
+    // 所以没法在这里查站方。能用的只有上一轮留下的 FuckD.harvestStillTodo：
+    //  - 有值且 >0 → 上一轮确认站方还有活，本轮不放行休眠
+    //  - 无值（本轮刚启动，什么都还没查）→ 也不放行，让 tasksStart 正常跑一遍去查清楚
+    // 最坏情况是多跑一轮完整流程，绝不会出现「站方还有任务却整天休眠」。
+    let harvestVetoed = false;
+    if (isAllDoneNow() && harvestCatsOn().length > 0) {
+        const still = Number(FuckD.harvestStillTodo);
+        if (Number.isFinite(still) && still > 0) {
+            harvestVetoed = true;
+            FuckF.log("🟡", `本地记为日常任务已清空，但站方仍有 ${still} 项可做，本轮不进入休眠`);
+        } else if (!Number.isFinite(still)) {
+            // 这里不打日志：tasksStart 里会输出「站方实况」和「收割后…」，
+            // 再报一句「未能确认」只会在每轮开头制造一条看着像故障的噪音。
+            harvestVetoed = true;
+        }
+    }
+    // 核对之后重新计算，这才是真正决定「要不要休眠」的值
+    const isAllDoneChecked = isAllDoneNow() && !harvestVetoed;
     // [PATCH] 任务收割与 HPQuiz 已移到 tasksStart 内部（复用随机停留，避免准点特征），
     // 此处不再重复调用。
-    if ((!isKeep && isAllDone) || !FuckD.bing.repo.includes("geoisam") || (!FuckD.tasks.sign && !FuckD.tasks.read && !FuckD.tasks.promos && !FuckD.tasks.search )) {
-        if (isAllDone) {
+    if ((!isKeep && isAllDoneChecked) || !FuckD.bing.repo.includes("geoisam") || (!FuckD.tasks.sign && !FuckD.tasks.read && !FuckD.tasks.promos && !FuckD.tasks.search )) {
+        if (isAllDoneChecked) {
             const allDoneDate = GM_getValue("Config.allDoneDate", 0);
             if (allDoneDate != FuckD.bing.dateNowNum) {
                 GM_setValue("Config.allDoneDate", FuckD.bing.dateNowNum);
@@ -4009,4 +4358,5 @@ return new Promise((resolveRaw) => {
             FuckF.tasksStart(initDelay);
         }, initDelay);
     }
+    })();
 })
