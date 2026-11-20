@@ -1,5 +1,114 @@
 # 变更记录
 
+## 3.7.56
+
+**任务状态日志不再说谎 + 连续打卡保护可观测 + 图标去掉 base64。**
+
+### 1. 「未完成明细」把明天的任务算成今天没做（已修）
+
+站方会提前一天下发每日任务。旧日志把两类混在一起：
+
+```
+🧾未完成明细：… DailySet_Child1(0/10)、DailySet_Child2(0/10)、DailySet_Child3(0/10)
+```
+
+拿到完整 offerid 才看清真相：
+
+| offerid | 进度 | complete |
+|---|---|---|
+| `Gamification_DailySet_ZHCN_20261120_Child1/2/3` | 10/10 | True ← **今天的，都做完了** |
+| `Gamification_DailySet_ZHCN_20261121_Child1/2/3` | 0/10 | False ← **明天的，还没到日期** |
+
+日志把 20261121 的三项显示成 `DailySet_Child1/2/3(0/10)`，看不出日期，于是看起来像今天没做。
+这就是「日常任务还有没完成」这个错觉的直接来源。
+
+现在按 offerid 内嵌日期分成三类输出：
+
+```
+🧾站方实况：活动 34 项，有 offerid 23 项 · 待处理 4 项 · 模块自管 1 项 · 未来待生效 3 项
+🧾待处理明细：Fosbury_info(0/1)、Sapphire_DailyCheckIn_Promotion(1/11760)、BingFlyout_Layout_DailyCheckIn(0/1000)、RAF_referees_details_v1_promotion(undefined/undefined)
+🧾模块自管 1 项（WW_NewLevel3_search_PC）：由搜索/阅读模块自然累积，无需单独上报
+🧾未来待生效 3 项（不影响今日完成判定，明日自动转为当日任务）
+```
+
+### 2. `WW_NewLevel3_search_PC(0/60)` 不是漏分（已澄清）
+
+它的 attributes 是：
+
+```json
+{"AnswerScenario.Tag":"PCSearch","Classification.Tag":"PCSearch",
+ "description":"Earn up to 60 points per day, 3 points per search",
+ "destination":"https://www.bing.com/"}
+```
+
+即 **PC 搜索计数器本身**（3 分/次、上限 60），对应 `pointsCounters.pc`（已 60/60）。
+它不需要单独上报，搜索时自然累积。之前它被列进「未完成」，看起来像漏了 60 分，是误读。
+
+### 3. 连续打卡保护：可观测 + 当前状态（新增每日记录）
+
+首次抓到站方 dashboard 的真实字段：
+
+```
+"streakCounter": 28                        ← 已连续打卡 28 天
+"isProtectionEnabled": false
+"streakProtection": {"isProtectionOn": false, "remainingDays": 0}   ← 剩余保护 0 天
+"streakBonus": 1000
+```
+
+兑换页（274KB）里搜不到任何「保护/streak」可兑换项，只有一条无关的「积分/连续打卡问题」反馈链接。
+所以**开不了的直接原因是 `remainingDays = 0`，没有保护额度**；页面只下发这两个字段，
+没有门槛说明，单看一天无法区分「没资格」和「额度已用完」。
+
+新增每天记录一次（`Config.streakHistory`，保留 30 天），攒几天就能对照出额度发放规律：
+
+```
+🔥连续打卡 28 天 · 保护=未开启 · 剩余保护 0 天
+```
+
+### 4. 图标不再内嵌 base64
+
+`@icon` 原来内嵌 96×96 PNG，占 **11,256 字符**。改为：
+
+```
+// @icon  https://simondengx.github.io/microsoft-rewards-userscript/icon.png
+```
+
+脚本体积 240,883 → 229,671 字节（省 11.2KB），原图另存仓库 `icon.png`（8.4KB）。
+
+### 5. 顺手清掉的噪音
+
+- 外层「未能确认站方日常任务状态」每轮都打，看着像故障；实际是任务启动前的正常状态，已移除。
+  该分支行为保留：拿不到上轮站方结论时不放行休眠，让 tasksStart 跑一遍查清楚。
+- 「今日任务收割完成」若存在上报失败项，现在会附上失败数量。
+
+## 3.7.41 – 3.7.47
+
+**搜索任务长期做不满的真凶：每轮只搜 4~7 次就无条件收工。**
+
+```js
+FuckD.search.limit = FuckF.getScopeRandomNum(4, 7);
+...
+if (FuckD.search.index >= FuckD.search.limit) {
+    FuckD.search.end++;      // 无条件收工，不看进度满没满
+    return true;
+}
+```
+
+PC 搜索 60 分通常要 20 次以上搜索才攒得满，但每轮搜到 4~7 次就 `end++` 结束，
+于是永远差一截，下一轮又从「本地记为已完成」开始。改为：
+
+- `index >= limit` 时先检查 `progress >= max`，未满就放宽上限继续搜
+- 单轮硬顶 30 次（约 15 分钟，在 service worker 生命周期内）
+- 到达硬顶仍未满时如实报「搜索已达单轮上限 30 次，仍未满分」，不谎称完成
+
+**同一批修复：**
+
+| 版本 | 内容 |
+|---|---|
+| 3.7.41 | `isAllDone` 的站方核对改成 `async IIFE` 真正 await（3.7.33 写成 `.then()`，异步结果永远来不及影响判断，那行「完成度核对」是装饰日志）；去掉 `pcMax ?? 60` / `if (pcMax === 0) pcMax = 60` 所有兜底，读不到就按未完成处理 |
+| 3.7.44 | 上报返回 `p > 0` 后回读站方 `progress`，进度没推进则不计入完成（防假完成） |
+| 3.7.47 | 收割后重新回读站方剩余项写入 `FuckD.harvestStillTodo`；外层据此否决「全部完成」，不再仅凭本地 `st.notified` |
+
 ## 3.7.37
 
 **修复：设置面板保存的值永远不被采用 —— UserConfig 只写值，不更新时间戳。**
