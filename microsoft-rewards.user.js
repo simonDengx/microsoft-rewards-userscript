@@ -2,7 +2,7 @@
 // @name	Microsoft Rewards 自动任务（维护版）
 // @name:zh-CN	微软积分商城自动任务（维护版）
 // @namespace	https://scriptcat.org/zh-CN/users/201032
-// @version	3.7.56
+// @version	3.7.63
 // @description	Microsoft Rewards 自动完成：签入、阅读、搜索、每日任务、App 新功能奖励。基于 geoisam 3.6.52 维护，修复网页通道失效并改为 dapi 通道分次执行
 // @author	simonDengx（维护）· geoisam（原作者）
 // @original-author	geoisam (geoisam@qq.com)
@@ -60,15 +60,15 @@ Config:
     keep:
         title: 持续检测（关闭则所有任务完成后不再检测）
         type: checkbox
-        default: true
+        default: false
     lock:
         title: 锁定国区（若当前 IP 非中国大陆地区则停止）
         type: checkbox
         default: true
     span:
-        title: 搜索间隔（至少 30 秒即间隔 15-45 秒）
+        title: 搜索间隔（默认 60 秒即 45-75 秒随机）
         type: number
-        default: 30
+        default: 60
         min: 30
         unit: ±15秒
     api:
@@ -105,25 +105,25 @@ Tasks:
         title: 搜索（www.bing.com）
         type: checkbox
         default: true
-Harvest:
+Makeup:
     quiz:
-        title: 收割·Bing 首页问答（HPQuiz，约 10 分/日）
+        title: 补做·Bing 首页问答（约 10 分/日）
         type: checkbox
         default: true
     sapphire:
-        title: 收割·App 新功能奖励（50/20/20/10 分）
+        title: 补做·App 新功能奖励（50/20/20/10 分）
         type: checkbox
         default: true
     evergreen:
-        title: 收割·每日问答（6 个，各 5 分）
+        title: 补做·每日问答（6 个，各 5 分）
         type: checkbox
         default: true
     dailyset:
-        title: 收割·每日热搜任务（当日 3×10 分）
+        title: 补做·每日热搜任务（当日 3×10 分）
         type: checkbox
         default: true
     checkin:
-        title: 收割·每日打卡
+        title: 补做·每日打卡
         type: checkbox
         default: true
     maxPerRun:
@@ -134,25 +134,25 @@ Harvest:
         max: 6
         unit: 个/次
     gapMin:
-        title: 任务之间最短间隔
+        title: 补做任务之间最短间隔
         type: number
-        default: 4
-        min: 1
-        max: 60
-        unit: 秒
-    gapMax:
-        title: 任务之间最长间隔
-        type: number
-        default: 11
+        default: 15
         min: 1
         max: 120
+        unit: 秒
+    gapMax:
+        title: 补做任务之间最长间隔
+        type: number
+        default: 40
+        min: 1
+        max: 180
         unit: 秒
     jitter:
         title: 每轮起始随机延迟（抗整点特征）
         type: number
-        default: 45
+        default: 300
         min: 0
-        max: 300
+        max: 900
         unit: 秒
 Notice:
     bro:
@@ -525,6 +525,17 @@ const FuckD = {
 }
 
 const FuckF = {
+    // 补做任务的配置读取：新组名 Makeup，兼容老版本的 Harvest 组。
+    // 开关类的值沿用用户之前的选择（避免升级后又被打开）；数值类统一用新默认（间隔更保守）。
+    makeup(key, def) {
+        if (/^(quiz|sapphire|evergreen|dailyset|checkin)$/.test(key)) {
+            // 读旧组名（裸 GM_getValue，绝不能再调 makeup 自己，否则无限递归）
+            const old = GM_getValue("Harvest." + key, undefined);
+            if (old !== undefined && old !== null) return old;
+        }
+        const v = GM_getValue("Makeup." + key, undefined);
+        return (v === undefined || v === null) ? def : v;
+    },
     getRandomNum(num) {
         return Math.floor(Math.random() * num)
     },
@@ -1314,13 +1325,16 @@ FuckF.taskRead = async () => {
         }
         if (cur >= max) {
             if (FuckD.read.date != FuckD.bing.dateNowNum) {
-                FuckF.log("📖", "接口返回进度已满，但本地无今日记录，强制开始阅读...");
-                cur = 0;
-                max = 30;
-            } else {
-                FuckD.read.end++;
-                return true;
+                // ⚠️ 站方说已满、本地只是没记，这里【只补记本地状态，绝不重报】。
+                //    以前是 cur=0 强制重来，于是跨天瞬间（本地已换日、站方计数尚未重置）
+                //    每轮都会重报 readsNeeded(10) 次阅读，一天最多 720 次无用请求。
+                FuckD.read.date = FuckD.bing.dateNowNum;
+                try { GM_setValue("Config.tasks", FuckD.bing.tasks); } catch (e) {}
+                try { GM_setValue("Config.readPoint", max); } catch (e) {}
+                FuckF.log("📖", `站方阅读进度已满（${cur}/${max}），本地补记完成状态，不重复上报`);
             }
+            FuckD.read.end++;
+            return true;
         }
         const envStatus = await FuckF.mainlandCheck();
         if (envStatus === 1) {
@@ -1781,7 +1795,25 @@ FuckF.taskPromos = async () => {
         let dashCurrent = 1;
         let earnCurrent = 1;
         let skipped = 0;
+        // 单项级失败记忆（当日）：同一活动连续两轮双通道都失败，就当天不再碰它。
+        // 模块级的 Config.promosRetry（8 轮）只能兜住整体，单项仍会被反复打 8 轮 × 3 次。
+        const pfState = (() => {
+            let pf = GM_getValue("Config.promosFailed", null);
+            if (!pf || pf.date != FuckD.bing.dateNowNum || typeof pf.count !== "object" || !pf.count) {
+                pf = { date: FuckD.bing.dateNowNum, count: {} };
+            }
+            return pf;
+        })();
+        const pfSkip = (id) => Number(pfState.count[id] || 0) >= 2;
+        const pfMark = (id) => {
+            pfState.count[id] = Number(pfState.count[id] || 0) + 1;
+            try { GM_setValue("Config.promosFailed", pfState); } catch (e) {}
+        };
         for (const item of promosArr) {
+            if (pfSkip(item.id)) {
+                // 已经判定放弃的项不计入 skipped，否则会一直触发「还有未记账活动」的重试分支
+                continue;
+            }
             if (item.type === 'dash') {
                 FuckF.log("📱", `正在执行第${dashCurrent}/${dashTasks}个手机端活动...`);
                 dashCurrent++;
@@ -1863,9 +1895,12 @@ FuckF.taskPromos = async () => {
                 }
             }
             if (!posted) {
-                // 双通道均失败：跳过该项继续队列，不累计积分，由下轮运行补做
+                // 双通道均失败：跳过该项继续队列，不累计积分，由下轮运行补做。
+                // 同时累加单项失败次数，达到 2 次后当天不再尝试（见 pfSkip）。
+                pfMark(item.id);
                 skipped++;
-                FuckF.log("🔴", `活动 ${item.id} 两个通道都失败，跳过该任务`);
+                const failN = Number(pfState.count[item.id] || 0);
+                FuckF.log("🔴", `活动 ${item.id} 两个通道都失败（今日第 ${failN} 次${failN >= 2 ? "，今天不再尝试" : ""}）`);
                 continue;
             }
             // 分值以服务端返回的 p 为准（APP 通道），网页通道成功时用卡片声明值
@@ -1986,7 +2021,7 @@ FuckF.readBalance = async () => {
 };
 
 // 每日台账：按任务名累计当日到账，用于跨轮次对账。
-// 收割（dapi 直报）与活动任务（网页/APP 通道）都会写这里，避免汇总只统计一半。
+// 补做（dapi 直报）与活动任务（网页/APP 通道）都会写这里，避免汇总只统计一半。
 FuckF.ledgerAdd = (name, point) => {
     try {
         const today = FuckD.bing.dateNowNum;
@@ -2031,8 +2066,8 @@ FuckF.getBingCookie = (name) => new Promise((resolve) => {
 FuckF.QUIZ_KEY = "Config.quiz";
 let hpQuizRunning = false;
 FuckF.taskHPQuiz = async () => {
-    if (!GM_getValue("Harvest.quiz", true)) return true;
-    // 连续未入账后的自动停跑标记（独立键，避免与 UserConfig 的 Harvest.quiz 冲突）
+    if (!FuckF.makeup("quiz", true)) return true;
+    // 连续未入账后的自动停跑标记（独立键，避免与 UserConfig 的 Makeup.quiz 冲突）
     if (GM_getValue("Config.quizDisabled", false)) return true;
     // HPQuiz 走 bing.com 的 cookie 会话，不使用 dapi token，也不依赖 FuckD.bing.host
     // （该字段在 tasksStart 里才赋值，而本函数在更早的外层流程就会被调用，不能依赖它）
@@ -2323,7 +2358,7 @@ FuckF.taskHPQuizInner = async () => {
     }
 };
 
-// ===== [PATCH] 通用 dapi 任务收割（2026-11-13 线上实测）=====
+// ===== [PATCH] 通用 dapi 补做任务（2026-11-13 线上实测）=====
 // 背景：rewards.bing.com 的 Server Action POST 通道已被网关整条拦截（任何 action id 都返回 500），
 // 网页端交卷/领取全部失效。而 dapi/me/activities 的 type 101 + offerid 仍然完全可用：
 // 服务端即时记账（响应 activity.p 为到账积分）、幂等、无 origin 校验。
@@ -2336,11 +2371,13 @@ FuckF.taskHPQuizInner = async () => {
 //   4. 每轮起始随机延迟：0～harvestJitter 秒，错开 cron 整点特征。
 //   5. 单轮上限：maxPerRun 默认 2，配合 cron 20 分钟一次 ≈ 每小时最多 6 个，分散到全天。
 //   6. 失败退避：失败项记入 failed，当天不再重试（次日清空），避免对同一 id 反复打。
-//   7. 任务勾选：Harvest 配置组里逐类开关，关掉的类目完全不发请求。
-FuckF.HARVEST_KEY = "Config.harvest";
+//   7. 任务勾选：Makeup 配置组里逐类开关，关掉的类目完全不发请求。
+FuckF.MAKEUP_KEY = "Config.makeup";
+// 旧版本用的状态键名，仅用于读取迁移
+FuckF.MAKEUP_KEY_LEGACY = "Config.harvest";
 
 // 任务分类：按 promotion 名称归类，供配置项分别开关
-FuckF.harvestCategory = (name) => {
+FuckF.makeupCategory = (name) => {
     if (!name) return "other";
     if (/^Sapphire_AppNewBonus_/i.test(name)) return "sapphire";
     // Evergreen 系列前缀不止 ENstar：实测还有 ZHstar_（中文版）等区域变体，
@@ -2378,56 +2415,75 @@ FuckF.getMobileProfile = async (region) => {
     return false;
 };
 
-// 读取/初始化当日收割状态（跨运行续传）
-FuckF.getHarvestState = (today) => {
-    let st = GM_getValue(FuckF.HARVEST_KEY, null);
+// 读取/初始化当日补做状态（跨运行续传）
+FuckF.getMakeupState = (today) => {
+    let st = GM_getValue(FuckF.MAKEUP_KEY, null);
+    if (!st) {
+        // 回退读旧键名（升级迁移）。注意必须【顺手写进新键】：
+        // 否则旧键一直有值、新键永远是空，两处读取（getMakeupState 与其他地方直接读新键）
+        // 会得出完全不同的结论 —— 实测就出现过「这里说已清空、别处说仍有待做」。
+        st = GM_getValue(FuckF.MAKEUP_KEY_LEGACY, null);
+        if (st && st.date == today) {
+            try { GM_setValue(FuckF.MAKEUP_KEY, st); } catch (e) {}
+        }
+    }
     if (!st || st.date != today) {
         st = { date: today, done: [], failed: [], notified: false, lastRun: 0, point: 0 };
+        try { GM_setValue(FuckF.MAKEUP_KEY, st); } catch (e) {}
     }
     if (!Array.isArray(st.done)) st.done = [];
     if (!Array.isArray(st.failed)) st.failed = [];
     return st;
 };
 
-// 通用任务收割：每次只做一小批，靠 cron 多次触发逐步完成
+// 通用补做任务：每次只做一小批，靠 cron 多次触发逐步完成
 let harvestRunning = false;
-FuckF.taskHarvest = async () => {
-    // 主流程有两处调用（常规分支 + 全完成分支），加锁避免同一次运行内重复收割
+FuckF.taskMakeup = async () => {
+    // 主流程有两处调用（常规分支 + 全完成分支），加锁避免同一次运行内重复补做
     if (harvestRunning) return true;
     if (!FuckD.bing.token) return true;
     harvestRunning = true;
     try {
-        return await FuckF.taskHarvestInner();
+        return await FuckF.taskMakeupInner();
     } finally {
         harvestRunning = false;
     }
 };
 
-FuckF.taskHarvestInner = async () => {
-    if (!FuckD.bing.token) return true;
+FuckF.taskMakeupInner = async () => {
+    if (!FuckD.bing.token) {
+        FuckF.log("🌐", "补做任务：无 token，跳过");
+        return true;
+    }
 
     // 配置项：哪类任务要做
     const enabledCats = {
-        sapphire: GM_getValue("Harvest.sapphire", true),
-        evergreen: GM_getValue("Harvest.evergreen", true),
-        dailyset: GM_getValue("Harvest.dailyset", true),
-        checkin: GM_getValue("Harvest.checkin", true),
+        sapphire: FuckF.makeup("sapphire", true),
+        evergreen: FuckF.makeup("evergreen", true),
+        dailyset: FuckF.makeup("dailyset", true),
+        checkin: FuckF.makeup("checkin", true),
     };
     const catOn = (c) => (c === "other" ? false : !!enabledCats[c]);   // 未分类的默认不做
-    if (!Object.values(enabledCats).some(Boolean)) return true;
+    if (!Object.values(enabledCats).some(Boolean)) {
+        FuckF.log("🌐", "补做任务：分类开关全关，跳过");
+        return true;
+    }
 
-    const maxPerRun = Math.max(1, Number(GM_getValue("Harvest.maxPerRun", 2)) || 2);
-    const gapMin = Math.max(1, Number(GM_getValue("Harvest.gapMin", 4)) || 4);
-    const gapMax = Math.max(gapMin, Number(GM_getValue("Harvest.gapMax", 11)) || 11);
-    const jitter = Math.max(0, Number(GM_getValue("Harvest.jitter", 45)) || 0);
+    const maxPerRun = Math.max(1, Number(FuckF.makeup("maxPerRun", 2)) || 2);
+    const gapMin = Math.max(1, Number(FuckF.makeup("gapMin", 15)) || 4);
+    const gapMax = Math.max(gapMin, Number(FuckF.makeup("gapMax", 40)) || 11);
+    const jitter = Math.max(0, Number(FuckF.makeup("jitter", 300)) || 0);
 
     const today = FuckD.bing.dateNowNum;
-    const st = FuckF.getHarvestState(today);
-    const save = () => GM_setValue(FuckF.HARVEST_KEY, st);
+    const st = FuckF.getMakeupState(today);
+    const save = () => GM_setValue(FuckF.MAKEUP_KEY, st);
 
     const region = FuckD.bing.status ? "cn" : (FuckD.bing.region || "").toLowerCase();
     const profile = await FuckF.getMobileProfile(region);
-    if (!profile) return false;
+    if (!profile) {
+        FuckF.log("🌐", "补做任务：站方资料获取失败，本轮跳过");
+        return false;
+    }
 
     const promos = profile.promotions || [];
     // 不可上报项的判定（均为 2026-11 实测结论）：
@@ -2461,7 +2517,7 @@ FuckF.taskHarvestInner = async () => {
         // 未来日期的每日任务：今日上报不计分，直接跳过（不当失败，次日自然成为当日项）
         const d = offerDate(a.offerid);
         if (d && d > Number(FuckD.bing.dateNowNum)) return false;
-        if (!catOn(FuckF.harvestCategory(p.name))) return false;
+        if (!catOn(FuckF.makeupCategory(p.name))) return false;
         if (st.done.includes(a.offerid) || st.failed.includes(a.offerid)) return false;
         return true;
     });
@@ -2479,7 +2535,7 @@ FuckF.taskHarvestInner = async () => {
             if (Number.isFinite(prog) && prog >= max) return false;
             if (handledRe.test(p.name || "") || handledRe.test(a.offerid || "")) return false;
             const skipped = skipRe.test(p.name || "") || skipRe.test(a.offerid || "");
-            const disabled = !catOn(FuckF.harvestCategory(p.name));
+            const disabled = !catOn(FuckF.makeupCategory(p.name));
             return skipped || disabled;
         });
         if (unadapted.length && GM_getValue("Config.unadaptedNotified", 0) != today) {
@@ -2504,7 +2560,7 @@ FuckF.taskHarvestInner = async () => {
                     if (/EdgeUsage/i.test(n + oid)) return "Edge用量(已下线)";
                     return "规则跳过";
                 }
-                if (!catOn(FuckF.harvestCategory(n))) return "分类开关关闭";
+                if (!catOn(FuckF.makeupCategory(n))) return "分类开关关闭";
                 const d = offerDate(oid);
                 if (d && d > Number(FuckD.bing.dateNowNum)) return "未来日期";
                 if (st.done.includes(oid)) return "本轮已完成";
@@ -2535,17 +2591,21 @@ FuckF.taskHarvestInner = async () => {
     } catch (e) {}
 
     if (!targets.length) {
+        if (st.notified) {
+            // 状态已标记清空：明确打出来，否则外部只看到「没有补做日志」会以为函数没被调用
+            FuckF.log("🌐", `补做任务：本轮无待做项（今日已标记清空，共 ${st.done.length} 个）`);
+        }
         if (!st.notified) {
             st.notified = true;
             save();
             // ⚠️ targets 已经排除了 st.failed 的项，所以「全部上报失败」也会走到这里。
-            //    必须把失败数一起报出来，否则「收割完成」会被误读成「日常任务都做完了」。
+            //    必须把失败数一起报出来，否则「补做完成」会被误读成「日常任务都做完了」。
             const failedCnt = Array.isArray(st.failed) ? st.failed.length : 0;
             let msg;
             if (st.point > 0) {
-                msg = `🌐今日任务收割完成：共 +${st.point} 积分（${st.done.length} 个任务）`;
+                msg = `🌐今日补做任务完成：共 +${st.point} 积分（${st.done.length} 个任务）`;
             } else {
-                msg = "🌐今日任务收割完成：无可做任务";
+                msg = "🌐今日补做任务完成：无可做任务";
             }
             if (failedCnt > 0) msg += `\n⚠️其中 ${failedCnt} 个上报未成功（已记入今日失败，不再重试）`;
             // 关键诊断：说清「无可做任务」到底是怎么来的。
@@ -2563,7 +2623,7 @@ FuckF.taskHarvestInner = async () => {
                     else if (Number.isFinite(pg) && pg >= mx) r = "progress已满";
                     else if (skipRe.test(p.name || "") || skipRe.test(a.offerid || "")) r = "不可上报规则";
                     else if (offerDate(a.offerid) > Number(FuckD.bing.dateNowNum)) r = "未来日期";
-                    else if (!catOn(FuckF.harvestCategory(p.name))) r = "分类关闭";
+                    else if (!catOn(FuckF.makeupCategory(p.name))) r = "分类关闭";
                     else if (st.done.includes(a.offerid)) r = "本轮已完成";
                     else if (st.failed.includes(a.offerid)) r = "本轮失败";
                     else r = "其他";
@@ -2583,13 +2643,13 @@ FuckF.taskHarvestInner = async () => {
     // 每批不同数量：1..maxPerRun，进一步打散节奏
     const batch = targets.slice(0, FuckF.getScopeRandomNum(1, maxPerRun));
 
-    FuckF.log("🌐", `任务收割：本轮处理 ${batch.length} 个（待做 ${targets.length} 个）`);
+    FuckF.log("🌐", `补做任务：本轮处理 ${batch.length} 个（待做 ${targets.length} 个）`);
 
     // 起始抖动：错开 cron 整点秒级特征
     if (jitter > 0) {
         const wait = FuckF.getScopeRandomNum(0, jitter);
         if (wait > 3) {
-            FuckF.log("⏳", `任务收割：随机等待 ${wait} 秒后开始（剩余 ${targets.length} 个）`);
+            FuckF.log("⏳", `补做任务：随机等待 ${wait} 秒后开始（剩余 ${targets.length} 个）`);
             await new Promise(r => setTimeout(r, wait * 1000));
         }
     }
@@ -2664,7 +2724,7 @@ FuckF.taskHarvestInner = async () => {
         // 任务之间的随机停顿：模拟逐个点开的节奏，不做固定间隔
         if (i < batch.length - 1) {
             const gap = FuckF.getScopeRandomNum(gapMin, gapMax);
-            FuckF.log("⏳", `任务收割：等待 ${gap} 秒后处理下一个`);
+            FuckF.log("⏳", `补做任务：等待 ${gap} 秒后处理下一个`);
             await new Promise(r => setTimeout(r, gap * 1000));
         }
     }
@@ -2679,18 +2739,18 @@ FuckF.taskHarvestInner = async () => {
             if (balAfter != null) delta = balAfter - balBefore;
         }
         if (delta == null) {
-            FuckF.log("🟡", `任务收割：本轮声明 +${gained} 分，余额校验不可用`);
+            FuckF.log("🟡", `补做任务：本轮声明 +${gained} 分，余额校验不可用`);
         } else if (delta >= gained) {
-            FuckF.log("🟢", `任务收割：余额校验通过 +${delta} 分（声明 +${gained}）`);
+            FuckF.log("🟢", `补做任务：余额校验通过 +${delta} 分（声明 +${gained}）`);
         } else if (delta > 0) {
-            FuckF.log("🟡", `任务收割：余额仅 +${delta} 分，低于声明的 +${gained}（可能记账滞后）`);
+            FuckF.log("🟡", `补做任务：余额仅 +${delta} 分，低于声明的 +${gained}（可能记账滞后）`);
         } else {
-            FuckF.log("🟡", `任务收割：声明 +${gained} 分但余额未变化，可能服务端延迟记账或已计入当日额度`);
+            FuckF.log("🟡", `补做任务：声明 +${gained} 分但余额未变化，可能服务端延迟记账或已计入当日额度`);
         }
     }
 
     if (gained > 0) {
-        FuckD.bing.sendMSG = `🌐任务收割：本轮 ${ok} 个任务，+${gained} 积分（今日累计 +${st.point}）`;
+        FuckD.bing.sendMSG = `🌐补做任务：本轮 ${ok} 个任务，+${gained} 积分（今日累计 +${st.point}）`;
         FuckF.log("🔵", FuckD.bing.sendMSG, true);
         FuckF.send(FuckD.wh);
     }
@@ -3232,11 +3292,24 @@ FuckF.getQueryWord = async () => {
 }
 
 FuckF.taskSearch = async () => {
+    // 当日熔断：站方进度整轮不动（延迟入账或账号受限）时，当天不再搜索。
+    // 没有这道闸，账号会被「每轮都以为没满、每轮都去补」拖成高频搜索，触发风控。
+    if (GM_getValue("Config.searchGiveUpDate", 0) == FuckD.bing.dateNowNum) {
+        FuckD.search.end++;
+        return true;
+    }
     if (!FuckD.tasks.search || FuckD.search.end > 0 || (!GM_getValue("Config.keep", true) && FuckD.search.date == FuckD.bing.dateNowNum)) {
         FuckD.search.end++;
         return true;
     }
     if (FuckD.search.index === 0) {
+        // 每轮搜索只在开头清一次会话标记（让 PC 搜索按桌面端计分）。
+        // 原先是每次搜索都清，20 次搜索 = 60 次 cookie 删除，属于明显的异常行为。
+        try {
+            GM_cookie("delete", { url: "https://bing.com", name: "_EDGE_S" });
+            GM_cookie("delete", { url: "https://bing.com", name: "_Rwho" });
+            GM_cookie("delete", { url: "https://bing.com", name: "_RwBf" });
+        } catch (e) {}
         const dashboard = await FuckF.getRewardsInfo();
         if (!dashboard) {
             return false;
@@ -3256,24 +3329,34 @@ FuckF.taskSearch = async () => {
         FuckD.search.m.max = mMax;
         const currentTotalSearch = FuckD.search.pc.progress + FuckD.search.m.progress;
         const lastTotalSearch = GM_getValue("Config.lastSearchProgress", -1);
-        let restrictedTimes = GM_getValue("Config.restrictedTimes", 0);
+        // 「连续几轮进度完全不动」的计数。以前叫 restrictedTimes 且触发后清 0，
+        // 结果只能挡一下当轮、下一轮满血复活 → 变成每轮都去补的循环，这正是封号的路径。
+        let stuckRounds = GM_getValue("Config.searchStuckRounds", 0);
         if (lastTotalSearch !== -1) {
             if (currentTotalSearch === lastTotalSearch && currentTotalSearch < (pcMax + mMax)) {
-                restrictedTimes++;
+                stuckRounds++;
             } else {
-                restrictedTimes = 0;
+                stuckRounds = 0;
             }
         }
         GM_setValue("Config.lastSearchProgress", currentTotalSearch);
-        GM_setValue("Config.restrictedTimes", restrictedTimes);
-        if (restrictedTimes >= 2) {
+        GM_setValue("Config.searchStuckRounds", stuckRounds);
+        const pcReport = FuckD.search.pc.max > 0 ? `\n💻电脑端搜索：${FuckD.search.pc.progress}/${FuckD.search.pc.max}` : "";
+        const mReport = FuckD.search.m.max > 0 ? `\n📱手机端搜索：${FuckD.search.m.progress}/${FuckD.search.m.max}` : "";
+        if (stuckRounds >= 3) {
+            // 连续 3 轮站方进度一字不动：大概率是延迟入账或账号被限流。
+            // 当天彻底停手，第二天自然恢复；继续刷只会加重风控。
+            GM_setValue("Config.searchGiveUpDate", FuckD.bing.dateNowNum);
             FuckD.search.end++;
-            GM_setValue("Config.lastSearchProgress", -1);
-            GM_setValue("Config.restrictedTimes", 0);
-            const pcReport = FuckD.search.pc.max > 0 ? `\n💻电脑端搜索：${FuckD.search.pc.progress}/${FuckD.search.pc.max}` : "";
-            const mReport = FuckD.search.m.max > 0 ? `\n📱手机端搜索：${FuckD.search.m.progress}/${FuckD.search.m.max}` : "";
-            FuckD.bing.sendMSG = `⚠️积分收入受限或账号异常，已中断今日搜索！${pcReport}${mReport}`;
+            FuckD.bing.sendMSG = `⚠️搜索进度连续 ${stuckRounds} 轮无变化，今日已停止搜索${pcReport}${mReport}`;
             FuckF.log("🔴", FuckD.bing.sendMSG, true);
+            FuckF.send(FuckD.wh);
+            return true;
+        }
+        if (stuckRounds >= 2) {
+            FuckD.search.end++;
+            FuckD.bing.sendMSG = `⚠️搜索进度连续 ${stuckRounds} 轮无变化，本轮暂停（下轮再确认一次，仍不动就今日停止）${pcReport}${mReport}`;
+            FuckF.log("🟡", FuckD.bing.sendMSG, true);
             FuckF.send(FuckD.wh);
             return true;
         }
@@ -3310,38 +3393,22 @@ FuckF.taskSearch = async () => {
         }
     }
     if (FuckD.search.index >= FuckD.search.limit) {
-        // ⚠️ 这里以前是无条件 end++ 收工，导致每轮只搜 limit(4~7) 次就结束，
-        //    而 PC 搜索满分 60 分通常要 20~30 次搜索才够——于是永远攒不满，
-        //    下一轮又从「本地记为已完成」开始，日常搜索长期做不完。
-        //    正确做法：只有进度真满才收工；没满就继续，直到达到硬上限。
-        const pcDone = FuckD.search.pc.progress >= FuckD.search.pc.max;
-        const mDone = FuckD.search.m.progress >= FuckD.search.m.max;
-        if (pcDone && mDone) {
-            FuckD.search.end++;
-            const pcReport = FuckD.search.pc.max > 0 ? `\n💻电脑端搜索：${FuckD.search.pc.progress}/${FuckD.search.pc.max}` : "";
-            const mReport = FuckD.search.m.max > 0 ? `\n📱手机端搜索：${FuckD.search.m.progress}/${FuckD.search.m.max}` : "";
-            FuckD.bing.sendMSG = `🔍搜索任务已完成！共搜索 ${FuckD.search.index} 次${pcReport}${mReport}`;
-            FuckF.log("🔵", FuckD.bing.sendMSG);
-            FuckF.send(FuckD.wh);
-            return true;
-        }
-        // 未满：放宽上限继续搜，但有硬顶防止无限循环。
-        // 30 次 × 约 30 秒间隔 ≈ 15 分钟，在 service worker 生命周期内可完成；
-        // 若间隔设得很大（用户把 span 调到 60+），实际会受时间限制，届时如实报告差额。
-        const HARD_CAP = 30;
-        if (FuckD.search.index < HARD_CAP) {
-            FuckF.log("🔍", `搜索未满（PC ${FuckD.search.pc.progress}/${FuckD.search.pc.max}），继续搜索（${FuckD.search.index}/${HARD_CAP}）`);
-            FuckD.search.limit = HARD_CAP;
-        } else {
-            // 到达硬顶仍未满：如实报告差额，不谎称完成
-            FuckD.search.end++;
-            const pcReport = FuckD.search.pc.max > 0 ? `\n💻电脑端搜索：${FuckD.search.pc.progress}/${FuckD.search.pc.max}` : "";
-            const mReport = FuckD.search.m.max > 0 ? `\n📱手机端搜索：${FuckD.search.m.progress}/${FuckD.search.m.max}` : "";
-            FuckD.bing.sendMSG = `⚠️搜索已达单轮上限 ${HARD_CAP} 次，仍未满分${pcReport}${mReport}`;
-            FuckF.log("🟡", FuckD.bing.sendMSG, true);
-            FuckF.send(FuckD.wh);
-            return true;
-        }
+        // ⚠️ 这里必须无条件收工，靠下一次 cron 重新读站方进度来续。
+        //
+        // 3.7.41 曾改成「未满就放宽到 30 次继续搜」，是个方向性错误：
+        //    · 站方 counters 是延迟入账的，同一轮里再搜也看不到新进度；
+        //    · 判断「满没满」用的 FuckD.search.pc.progress 是脚本本地 +3 累加出来的，
+        //      不是站方真值 —— 站方卡在 54/60 时，本地早就算到 60 了；
+        //    · 判「完成」的那个分支只 end++ 不写 Config.tasks.date，下一轮又从 54 重来。
+        //    结果就是「每轮都以为没满、每轮都去补」，一天搜上百次 → 触发风控。
+        //
+        // 正确策略：本轮搜完就停，把「是否已满」完全交给下一轮的站方读数判断。
+        FuckD.search.end++;
+        const pcReport = FuckD.search.pc.max > 0 ? `\n💻电脑端搜索：${FuckD.search.pc.progress}/${FuckD.search.pc.max}` : "";
+        const mReport = FuckD.search.m.max > 0 ? `\n📱手机端搜索：${FuckD.search.m.progress}/${FuckD.search.m.max}` : "";
+        FuckD.bing.sendMSG = `🔍本轮搜索 ${FuckD.search.index} 次，进度${pcReport}${mReport}（延迟入账，下轮再核对）`;
+        FuckF.log("🔍", FuckD.bing.sendMSG);
+        return true;
     }
     FuckD.search.date = 0;
     let query, params, pcorm, headers, regionMKT = "";
@@ -3357,9 +3424,8 @@ FuckF.taskSearch = async () => {
             FuckD.bing.code = -1;
             return true;
         }
-        GM_cookie("delete", { url: "https://bing.com", name: "_EDGE_S" });
-        GM_cookie("delete", { url: "https://bing.com", name: "_Rwho" });
-        GM_cookie("delete", { url: "https://bing.com", name: "_RwBf" });
+        // ⚠️ 这里原本每次搜索都删 3 个 cookie（_EDGE_S/_Rwho/_RwBf），20 次搜索 = 60 次删除。
+        //    每次搜索重开会话是明显的异常行为，已改到 taskSearch 每轮开头只清一次。
         if (FuckD.bing.status) regionMKT = "&mkt=zh-CN";
         params = `q=${encodeURIComponent(keyword)}&form=QBLH${regionMKT}`;
         query = `https://${FuckD.bing.host}/search?${params}`;
@@ -3411,6 +3477,18 @@ FuckF.taskSearch = async () => {
         FuckF.log("🔴", `搜索任务出错！🔛${e.message}`);
     }
     FuckD.search.index++;
+    // 当日累计搜索次数（跨轮持久化）：index 每轮清零，只有这个能反映「今天一共搜了多少次」。
+    // 正常满额约 20 次，留 3 倍余量（60 次）；超过就当天停手，避免任何逻辑失误变成刷分。
+    try {
+        let cnt = GM_getValue("Config.searchCountToday", null);
+        if (!cnt || cnt.date != FuckD.bing.dateNowNum) cnt = { date: FuckD.bing.dateNowNum, n: 0 };
+        cnt.n++;
+        GM_setValue("Config.searchCountToday", cnt);
+        if (cnt.n >= 60) {
+            GM_setValue("Config.searchGiveUpDate", FuckD.bing.dateNowNum);
+            FuckF.log("🔴", `今日搜索已达 ${cnt.n} 次上限，停止继续搜索（防误刷）`, true);
+        }
+    } catch (e) {}
     return false;
 }
 
@@ -3737,6 +3815,19 @@ if (typeof window !== 'undefined' && window.location && window.location.hostname
 }
 
 return new Promise((resolveRaw) => {
+    // 一次性迁移：把历史遗留的「持续检测」关掉。
+    // 原因：keep=true 时，即使今天全部任务都完成，仍会每 20 分钟跑一整遍
+    //（实测约 7 次请求/轮，72 轮 ≈ 500 次/天，24 小时不间断），是全天在线的明显特征。
+    // 只迁移一次（有标记位），用户之后仍可在设置里重新打开。
+    try {
+        if (!GM_getValue("Config.keepMigrated", false)) {
+            GM_setValue("Config.keepMigrated", true);
+            if (GM_getValue("Config.keep", true) === true) {
+                GM_setValue("Config.keep", false);
+                FuckF.log("🟡", "已关闭「持续检测」：任务完成后不再每 20 分钟重复请求；需要恢复请在设置里重新打开");
+            }
+        }
+    } catch (e) {}
     // 运行锁：cron 与手动 run 可能重叠，重叠会让同一批任务被并发上报（判重或重复计时）。
     // 用心跳续期：运行期间每 60 秒刷新一次时间戳，超过 3 分钟没心跳视为上次被强杀（装新版本、重启浏览器都会），
     // 这样既能拦住并发，又不会因为实例被杀而白等 10 分钟。
@@ -3756,7 +3847,6 @@ return new Promise((resolveRaw) => {
     };
 
     const seconds = FuckF.getTimestamp()
-    GM_cookie("delete", { url: "https://bing.com", name: "_EDGE_S" })
     FuckD.search.limit = FuckF.getScopeRandomNum(4, 7)
     FuckD.bing.dateNowNum = FuckF.getDatetime(true)
     FuckD.bing.dateNowhyphen = FuckF.getDatetime(false, false)
@@ -3799,11 +3889,11 @@ return new Promise((resolveRaw) => {
             if (FuckD.bing.end === 0) {
                 const checkDone = (taskEnabled, taskDate) => !taskEnabled || taskDate == FuckD.bing.dateNowNum;
                 const isAllDone = checkDone(FuckD.tasks.sign, FuckD.sign.date) && checkDone(FuckD.tasks.read, FuckD.read.date) && checkDone(FuckD.tasks.promos, FuckD.promos.date) && checkDone(FuckD.tasks.search, FuckD.search.date);
-                // ⚠️ 这里以前只看四项日期，不看收割。收割（日常任务）需要多轮才清空，
+                // ⚠️ 这里以前只看四项日期，不看补做。补做（日常任务）需要多轮才清空，
                 //    但四项一记完成就走到这里打「全部完成」，把剩下的日常任务掩盖掉。
                 //    现在同外层一样，要求站方没有可做的日常任务才算完成。
-                const harvestStillNow = Number(FuckD.harvestStillTodo);
-                const harvestBlocking = ["sapphire", "evergreen", "dailyset", "checkin"].some((c) => GM_getValue("Harvest." + c, true))
+                const harvestStillNow = Number(FuckD.makeupStillTodo);
+                const harvestBlocking = ["sapphire", "evergreen", "dailyset", "checkin"].some((c) => FuckF.makeup(c, true))
                     && (!Number.isFinite(harvestStillNow) || harvestStillNow > 0);
                 if (isAllDone && harvestBlocking) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -3961,13 +4051,13 @@ return new Promise((resolveRaw) => {
                 const fmt = (d) => (!d ? "未做" : (d == today ? "今日已完成" : "上次" + d));
                 const onOff = (b) => (b ? "开" : "关");
                 FuckF.log("🗓", `任务调度：签入[${onOff(FuckD.tasks.sign)} ${fmt(FuckD.sign.date)}] · 阅读[${onOff(FuckD.tasks.read)} ${fmt(FuckD.read.date)}] · 活动[${onOff(FuckD.tasks.promos)} ${fmt(FuckD.promos.date)}] · 搜索[${onOff(FuckD.tasks.search)} ${fmt(FuckD.search.date)}]`);
-                // 日常任务（收割）单独一行：它每轮只推进 maxPerRun 个，需要多轮才清空，
+                // 日常任务（补做）单独一行：它每轮只推进 maxPerRun 个，需要多轮才清空，
                 // 不单独报的话从外部完全看不出「还剩几个没做」。
-                const hs = GM_getValue(FuckF.HARVEST_KEY, null) || {};
+                const hs = FuckF.getMakeupState(today);
                 const hsToday = hs.date == today;
                 const doneN = hsToday && Array.isArray(hs.done) ? hs.done.length : 0;
                 const failN = hsToday && Array.isArray(hs.failed) ? hs.failed.length : 0;
-                const catOn = ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => GM_getValue("Harvest." + c, true));
+                const catOn = ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => FuckF.makeup(c, true));
                 FuckF.log("🗓", `日常任务：${catOn.length ? catOn.join("/") : "全关"} · 今日已完成 ${doneN} 个 · 失败 ${failN} 个 · ${hsToday && hs.notified ? "本地记为已清空" : "仍有待做"}`);
             } catch (e) {}
             const isTokenOK = await FuckF.renewToken();
@@ -4045,7 +4135,7 @@ return new Promise((resolveRaw) => {
                         try {
                             const skipReV = /TrialUser|AppInstall|AppMigration|^Fosbury_|^HVA_|^Rewards_EdgeUsage_progress_info$|DailyCheckIn_Parent|Gamification_Sapphire_DailyCheckIn/i;
                             const todayNumV = Number(FuckD.bing.dateNowNum);
-                            const catsOnV = ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => GM_getValue("Harvest." + c, true));
+                            const catsOnV = ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => FuckF.makeup(c, true));
                             const stillTodo = ps.filter((p) => {
                                 const a = (p && p.attributes) || {};
                                 if (!a.offerid) return false;
@@ -4056,19 +4146,20 @@ return new Promise((resolveRaw) => {
                                 if (skipReV.test(p.name || "") || skipReV.test(a.offerid || "")) return false;
                                 const dm = String(a.offerid).match(/(20\d{6})/);
                                 if (dm && Number(dm[1]) > todayNumV) return false;
-                                const cat = FuckF.harvestCategory(p.name);
+                                const cat = FuckF.makeupCategory(p.name);
                                 if (cat === "other") return false;
                                 if (!catsOnV.includes(cat)) return false;
                                 return true;
                             });
-                            FuckD.harvestStillTodo = stillTodo.length;
+                            FuckD.makeupStillTodo = stillTodo.length;
+                            try { GM_setValue("Config.makeupStillTodo", { date: FuckD.bing.dateNowNum, n: stillTodo.length }); } catch (e) {}
                             if (stillTodo.length > 0) {
                                 FuckF.log("🟡", `站方仍有 ${stillTodo.length} 项日常任务可做，本轮不会判定为「全部完成」`);
-                                // 清掉本地 notified，让收割重新放开
+                                // 清掉本地 notified，让补做重新放开
                                 try {
-                                    const hsV = GM_getValue(FuckF.HARVEST_KEY, null) || {};
+                                    const hsV = FuckF.getMakeupState(FuckD.bing.dateNowNum);
                                     hsV.notified = false;
-                                    GM_setValue(FuckF.HARVEST_KEY, hsV);
+                                    GM_setValue(FuckF.MAKEUP_KEY, hsV);
                                 } catch (e) {}
                             }
                         } catch (e) {}
@@ -4079,14 +4170,14 @@ return new Promise((resolveRaw) => {
             if (FuckD.tasks.edge && FuckD.bing.token) {
                 FuckF.taskEdgeBrowsing().catch(e => FuckF.log("🔴", `Edge 浏览连签调度异常！🔛${e.message}`));
             }
-            // [PATCH] 通用任务收割：网页交卷通道已下线，改用 dapi type101 逐项上报
+            // [PATCH] 通用补做任务：网页交卷通道已下线，改用 dapi type101 逐项上报
             // Sapphire / Evergreen / 每日任务全套，每天一轮
             // [PATCH] 必须 await：这两个任务内部有随机等待（最长数十秒），
-            // 若 fire-and-forget，脚本在任务全部完成后 resolve，service worker 被回收，等待中的收割会被直接掐断。
+            // 若 fire-and-forget，脚本在任务全部完成后 resolve，service worker 被回收，等待中的补做会被直接掐断。
             if (FuckD.bing.token) {
-                try { await FuckF.taskHarvest(); } catch (e) { FuckF.log("🔴", `任务收割异常！🔛${e.message}`); }
+                try { await FuckF.taskMakeup(); } catch (e) { FuckF.log("🔴", `补做任务异常！🔛${e.message}`); }
             }
-            // 收割之后重算站方剩余：前面的 harvestStillTodo 是收割前的快照，
+            // 补做之后重算站方剩余：前面的 makeupStillTodo 是补做前的快照，
             // 用它判断「是否全部完成」会把刚做掉的那几个也算进去，导致永远不完成。
             if (FuckD.bing.token) {
                 try {
@@ -4095,7 +4186,7 @@ return new Promise((resolveRaw) => {
                     if (profR && Array.isArray(profR.promotions)) {
                         const skipReR = /TrialUser|AppInstall|AppMigration|^Fosbury_|^HVA_|^Rewards_EdgeUsage_progress_info$|DailyCheckIn_Parent|Gamification_Sapphire_DailyCheckIn/i;
                         const todayR = Number(FuckD.bing.dateNowNum);
-                        const catsR = ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => GM_getValue("Harvest." + c, true));
+                        const catsR = ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => FuckF.makeup(c, true));
                         const stillR = profR.promotions.filter((p) => {
                             const a = (p && p.attributes) || {};
                             if (!a.offerid) return false;
@@ -4106,16 +4197,17 @@ return new Promise((resolveRaw) => {
                             if (skipReR.test(p.name || "") || skipReR.test(a.offerid || "")) return false;
                             const dm = String(a.offerid).match(/(20\d{6})/);
                             if (dm && Number(dm[1]) > todayR) return false;
-                            const cat = FuckF.harvestCategory(p.name);
+                            const cat = FuckF.makeupCategory(p.name);
                             if (cat === "other") return false;
                             if (!catsR.includes(cat)) return false;
                             return true;
                         });
-                        FuckD.harvestStillTodo = stillR.length;
+                        FuckD.makeupStillTodo = stillR.length;
+                        try { GM_setValue("Config.makeupStillTodo", { date: FuckD.bing.dateNowNum, n: stillR.length }); } catch (e) {}
                         if (stillR.length > 0) {
-                            FuckF.log("🟡", `收割后站方仍有 ${stillR.length} 项日常任务可做，下一轮继续（不判定为全部完成）`);
+                            FuckF.log("🟡", `补做后站方仍有 ${stillR.length} 项日常任务可做，下一轮继续（不判定为全部完成）`);
                         } else {
-                            FuckF.log("🟢", "收割后站方日常任务已清空");
+                            FuckF.log("🟢", "补做后站方日常任务已清空");
                         }
                     }
                 } catch (e) {}
@@ -4153,10 +4245,10 @@ return new Promise((resolveRaw) => {
             // [PATCH] HPQuiz：bing.com + funapi 独立通道，不依赖 dapi token。
             // 放在这里而不是外层流程，是为了复用上面的随机停留，避免每次 cron 准点开跑。
             try { await FuckF.taskHPQuiz(); } catch (e) { FuckF.log("🔴", `HPQuiz 异常！🔛${e.message}`); }
-            // 每日汇总：收割与问答各自维护当日累计，这里合并成一行，便于一眼看到今天赚了多少
+            // 每日汇总：补做与问答各自维护当日累计，这里合并成一行，便于一眼看到今天赚了多少
             try {
                 const today = FuckD.bing.dateNowNum;
-                const hs = GM_getValue(FuckF.HARVEST_KEY, {}) || {};
+                const hs = FuckF.getMakeupState(FuckD.bing.dateNowNum);
                 const qs = GM_getValue(FuckF.QUIZ_KEY, {}) || {};
                 const lg = GM_getValue("Config.ledger", {}) || {};
                 const hp = hs.date == today ? (hs.point || 0) : 0;
@@ -4164,10 +4256,10 @@ return new Promise((resolveRaw) => {
                 const tt = GM_getValue("Config.todayTotal", null);
                 const siteTotal = Number((tt && tt.date == today ? tt.total : 0) || FuckD.bing.todayTotalPoints || 0);
                 if (siteTotal > 0) {
-                    // 站方当日报表最准：包含签入/阅读/搜索/活动/收割全部来源
-                    FuckF.log("📊", `今日站方统计 +${siteTotal} 分（本脚本收割 +${hp}，HPQuiz +${qp}，其余为签入/阅读/搜索/活动）`);
+                    // 站方当日报表最准：包含签入/阅读/搜索/活动/补做全部来源
+                    FuckF.log("📊", `今日站方统计 +${siteTotal} 分（本脚本补做 +${hp}，HPQuiz +${qp}，其余为签入/阅读/搜索/活动）`);
                 } else if (hp > 0 || qp > 0) {
-                    FuckF.log("📊", `今日累计 +${hp + qp} 分（任务收割 +${hp}，HPQuiz +${qp}）`);
+                    FuckF.log("📊", `今日累计 +${hp + qp} 分（补做任务 +${hp}，HPQuiz +${qp}）`);
                 }
                 // 台账明细：按任务名列出当日每一笔到账，跨轮次累加
                 if (lg.date == today && lg.items && Object.keys(lg.items).length) {
@@ -4234,20 +4326,20 @@ return new Promise((resolveRaw) => {
     }
     const isKeep = GM_getValue("Config.keep", true);
     const checkDone = (taskEnabled, taskDate) => !taskEnabled || taskDate == FuckD.bing.dateNowNum;
-    // ⚠️ 收割（DailySet / Evergreen / Sapphire，也就是站方「日常任务」那一栏）
+    // ⚠️ 补做（DailySet / Evergreen / Sapphire，也就是站方「日常任务」那一栏）
     //    以前【完全不在】完成判定里，这是「日常任务没做完但脚本说全部完成」的直接原因。
-    //    收割是每轮最多做 maxPerRun(默认 2) 个、靠多轮 cron 逐步推进的，
+    //    补做是每轮最多做 maxPerRun(默认 2) 个、靠多轮 cron 逐步推进的，
     //    需要好几轮才能清空；但只要 sign/read/promos/search 四项记了今天，
     //    isAllDone 就为 true，脚本立刻进入「今日已全部完成」休眠，
-    //    收割再也不会被调用，剩下的日常任务整天都不会做。
+    //    补做再也不会被调用，剩下的日常任务整天都不会做。
     //
     //    ⚠️ 而且不能用本地 st.notified 判定：实测出现过「只做了 2 个就 notified=true、
     //    日志说已清空，但站方日常任务还差一大截」的情况。必须回读站方 promotions 才算数。
-    const harvestCatsOn = () => ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => GM_getValue("Harvest." + c, true));
+    const harvestCatsOn = () => ["sapphire", "evergreen", "dailyset", "checkin"].filter((c) => FuckF.makeup(c, true));
     // 同步版只用于「是否需要去核对」的快速判断，真正裁决用下面 async 的站方回读
     const harvestMaybeDone = () => {
         if (!harvestCatsOn().length) return true;
-        const hs = GM_getValue(FuckF.HARVEST_KEY, null) || {};
+        const hs = FuckF.getMakeupState(FuckD.bing.dateNowNum);
         return hs.date == FuckD.bing.dateNowNum && hs.notified === true;
     };
     const isAllDoneNow = () => checkDone(FuckD.tasks.sign, FuckD.sign.date)
@@ -4299,25 +4391,32 @@ return new Promise((resolveRaw) => {
     // 实测出现过只做 2 个就 notified=true、站方日常任务还差一大堆的情况。
     //
     // 注意这段在 tasksStart 之外，此时还【没有】token（renewToken 在 tasksStart 里才跑），
-    // 所以没法在这里查站方。能用的只有上一轮留下的 FuckD.harvestStillTodo：
+    // 所以没法在这里查站方。能用的只有上一轮留下的 FuckD.makeupStillTodo：
     //  - 有值且 >0 → 上一轮确认站方还有活，本轮不放行休眠
     //  - 无值（本轮刚启动，什么都还没查）→ 也不放行，让 tasksStart 正常跑一遍去查清楚
     // 最坏情况是多跑一轮完整流程，绝不会出现「站方还有任务却整天休眠」。
     let harvestVetoed = false;
     if (isAllDoneNow() && harvestCatsOn().length > 0) {
-        const still = Number(FuckD.harvestStillTodo);
+        const stillMem = Number(FuckD.makeupStillTodo);
+        let still = stillMem;
+        if (!Number.isFinite(stillMem)) {
+            // 新实例里内存是空的，读上一次运行落盘的结果，避免「每轮都当未确认」而强制跑全套流程
+            const saved = GM_getValue("Config.makeupStillTodo", null);
+            still = (saved && saved.date == FuckD.bing.dateNowNum) ? Number(saved.n) : NaN;
+            if (Number.isFinite(still)) FuckD.makeupStillTodo = still;
+        }
         if (Number.isFinite(still) && still > 0) {
             harvestVetoed = true;
             FuckF.log("🟡", `本地记为日常任务已清空，但站方仍有 ${still} 项可做，本轮不进入休眠`);
         } else if (!Number.isFinite(still)) {
-            // 这里不打日志：tasksStart 里会输出「站方实况」和「收割后…」，
+            // 这里不打日志：tasksStart 里会输出「站方实况」和「补做后…」，
             // 再报一句「未能确认」只会在每轮开头制造一条看着像故障的噪音。
             harvestVetoed = true;
         }
     }
     // 核对之后重新计算，这才是真正决定「要不要休眠」的值
     const isAllDoneChecked = isAllDoneNow() && !harvestVetoed;
-    // [PATCH] 任务收割与 HPQuiz 已移到 tasksStart 内部（复用随机停留，避免准点特征），
+    // [PATCH] 补做任务与 HPQuiz 已移到 tasksStart 内部（复用随机停留，避免准点特征），
     // 此处不再重复调用。
     if ((!isKeep && isAllDoneChecked) || !FuckD.bing.repo.includes("geoisam") || (!FuckD.tasks.sign && !FuckD.tasks.read && !FuckD.tasks.promos && !FuckD.tasks.search )) {
         if (isAllDoneChecked) {
